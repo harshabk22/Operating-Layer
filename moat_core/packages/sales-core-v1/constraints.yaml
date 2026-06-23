@@ -1,0 +1,11 @@
+constraints:
+  - name: Proposal Required
+    description: A formal proposal must be sent before entering negotiation.
+  - name: Approval Required
+    description: Deals must be approved by management before being marked as Won.
+  - name: Contract Required
+    description: A signed contract is required to close the deal.
+  - name: Invoice Required
+    description: An invoice must be generated post-sale.
+  - name: Payment Required
+    description: Payment must be received post-sale.

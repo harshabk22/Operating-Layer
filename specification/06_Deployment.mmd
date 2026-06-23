@@ -1,0 +1,33 @@
+graph TD
+    subgraph Environments
+        Dev[Developer Environment]
+        VPS[Customer VPS]
+    end
+
+    subgraph Core Services
+        PR[Package Registry]
+        US[Update Service]
+        BS[Backup Service]
+        MS[Migration Service]
+    end
+
+    subgraph Monitoring
+        HM[Health Monitoring]
+        IR[Incident Reporting]
+    end
+
+    subgraph Lifecycle
+        PUL[Package Upgrade Lifecycle]
+    end
+
+    US --> VPS
+    PR --> US
+    BS --> VPS
+    MS --> VPS
+    VPS --> HM
+    HM --> IR
+    PUL --> US
+    
+    classDef rules fill:#bbf,stroke:#333,stroke-width:2px;
+    Rules[Single-Tenant Deployment Model]:::rules
+    VPS -.-> Rules

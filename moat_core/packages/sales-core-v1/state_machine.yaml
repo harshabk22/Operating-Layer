@@ -1,0 +1,27 @@
+name: LeadLifecycle
+states:
+  - New
+  - Qualified
+  - ProposalSent
+  - Negotiation
+  - AwaitingApproval
+  - Won
+  - Lost
+  - Suspended
+transitions:
+  - from: New
+    to: Qualified
+  - from: Qualified
+    to: ProposalSent
+  - from: ProposalSent
+    to: Negotiation
+  - from: Negotiation
+    to: AwaitingApproval
+  - from: AwaitingApproval
+    to: Won
+  - from: AwaitingApproval
+    to: Negotiation
+  - from: '*'
+    to: Lost
+  - from: '*'
+    to: Suspended

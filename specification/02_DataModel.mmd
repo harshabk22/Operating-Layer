@@ -1,0 +1,201 @@
+classDiagram
+    %% Structural
+    class Organization {
+        +UUID id
+        +String name
+    }
+    class Actor {
+        +UUID id
+        +String identity
+    }
+    class OrganizationActorRole {
+        +UUID organization_id
+        +UUID actor_id
+        +String role
+    }
+    class Asset {
+        +UUID id
+        +String type
+        +JSON metadata
+    }
+
+    %% Operational
+    class Case {
+        +UUID id
+        +UUID state_machine_id
+        +UUID current_state_id
+        +UUID package_id
+        +String package_version
+    }
+    class StateMachine {
+        +UUID id
+        +String name
+    }
+    class State {
+        +UUID id
+        +String name
+        +String status
+    }
+    class Transition {
+        +UUID id
+        +UUID from_state
+        +UUID to_state
+    }
+    class Constraint {
+        +UUID id
+        +String rule
+    }
+    class Evidence {
+        +UUID id
+        +JSON payload
+        +Boolean invalidated
+    }
+    class Waiver {
+        +UUID id
+        +UUID constraint_id
+        +String reason
+    }
+
+    %% Execution
+    class Trigger {
+        +UUID id
+        +String event_type
+    }
+    class Command {
+        +UUID id
+        +String intent
+    }
+    class Action {
+        +UUID id
+        +String work_item_type
+    }
+    class Capability {
+        +UUID id
+        +String name
+    }
+    class Assignment {
+        +UUID id
+        +UUID actor_id
+    }
+    class Approval {
+        +UUID id
+        +UUID actor_id
+        +Boolean status
+    }
+    class Execution {
+        +UUID id
+        +String status
+    }
+    class IdempotencyKey {
+        +String key
+        +DateTime expires_at
+    }
+
+    %% Scheduling
+    class Availability {
+        +UUID id
+        +DateTime start
+        +DateTime end
+    }
+    class ScheduledEvent {
+        +UUID id
+        +DateTime time
+    }
+    class Participant {
+        +UUID event_id
+        +UUID actor_id
+    }
+    class ReservedResource {
+        +UUID event_id
+        +UUID asset_id
+    }
+
+    %% Governance
+    class Budget {
+        +UUID id
+        +Float amount
+    }
+    class BudgetPolicy {
+        +UUID id
+        +JSON limits
+    }
+    class BudgetConsumption {
+        +UUID case_id
+        +Float consumed
+    }
+    class CircuitBreaker {
+        +UUID id
+        +String state
+    }
+    class Incident {
+        +UUID id
+        +String severity
+    }
+
+    %% Persistence
+    class Event {
+        +UUID id
+        +String type
+        +JSON payload
+    }
+    class EvidenceInvalidatedEvent {
+        +UUID id
+        +UUID evidence_id
+    }
+    class Snapshot {
+        +UUID id
+        +JSON state
+        +Integer version
+    }
+    class Projection {
+        +UUID id
+        +JSON read_model
+    }
+
+    %% Package
+    class Package {
+        +UUID id
+        +String name
+    }
+    class PackageVersion {
+        +UUID id
+        +String version
+    }
+    class PackageDependency {
+        +UUID package_id
+        +UUID depends_on
+    }
+
+    Organization "1" -- "*" OrganizationActorRole
+    Actor "1" -- "*" OrganizationActorRole
+    Organization "1" -- "*" Asset
+    Organization "1" -- "*" Budget
+    Package "1" -- "*" BudgetPolicy
+    Case "1" -- "*" BudgetConsumption
+    
+    Case "1" -- "1" PackageVersion
+    Case "1" -- "1" StateMachine
+    StateMachine "1" -- "*" State
+    StateMachine "1" -- "*" Transition
+    Transition "1" -- "*" Constraint
+    Constraint "1" -- "*" Evidence
+    Constraint "1" -- "*" Waiver
+    
+    Trigger "1" -- "1" Command
+    Command "1" -- "*" Event
+    Event "1" -- "*" Action
+    Action "1" -- "*" Execution
+    Execution "1" -- "1" IdempotencyKey
+    Execution "1" -- "*" Assignment
+    Execution "1" -- "1" Capability
+    Assignment "1" -- "1" Approval
+    
+    Actor "1" -- "*" Availability
+    Asset "1" -- "*" Availability
+    ScheduledEvent "1" -- "*" Participant
+    ScheduledEvent "1" -- "*" ReservedResource
+    
+    Package "1" -- "*" PackageVersion
+    PackageVersion "1" -- "*" PackageDependency
+    Case "1" -- "*" Event
+    Event <|-- EvidenceInvalidatedEvent

@@ -1,0 +1,16 @@
+{
+  "name": "moat-whatsapp-baileys-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp Baileys Bridge for Moat Core",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "express": "^4.21.0",
+    "qrcode": "^1.5.3",
+    "pino": "^8.19.0"
+  }
+}

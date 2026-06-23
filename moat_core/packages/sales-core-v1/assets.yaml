@@ -1,0 +1,13 @@
+assets:
+  - name: Opportunity
+    description: A potential sales deal or revenue-generating event.
+  - name: Proposal
+    description: A formal offer or plan presented to a lead or customer.
+  - name: Quote
+    description: A formal statement of promised price for products or services.
+  - name: Contract
+    description: A legally binding agreement between the business and a customer.
+  - name: Invoice
+    description: A commercial document issued to a customer relating to a sale, indicating products, quantities, and agreed prices.
+  - name: Document
+    description: Any general file or record related to the sales process.

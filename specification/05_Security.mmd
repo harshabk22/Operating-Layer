@@ -1,0 +1,32 @@
+graph TD
+    subgraph Core Security
+        RBAC[RBAC]
+        TI[Tenant Isolation]
+        CA[Capability Authorization]
+    end
+
+    subgraph Validation & Audit
+        EV[Evidence Validation]
+        EI[Evidence Invalidation]
+        W[Waivers]
+        AT[Audit Trail]
+    end
+
+    subgraph Cryptography
+        CS[Crypto-Shredding]
+        KM[Key Management]
+    end
+
+    subgraph Process Security
+        AS[Approval Security]
+        PH[Prompt Hierarchy]
+        IRR[Immutable Runtime Rules]
+    end
+
+    TI --> RBAC
+    RBAC --> CA
+    CA --> AS
+    EV --> EI
+    EV --> W
+    AT --> CS
+    CS --> KM

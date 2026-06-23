@@ -1,0 +1,33 @@
+# Rust build artifacts
+target/
+
+# Environment configurations
+.env
+.env.*
+
+# OS generated files
+.DS_Store
+
+# Databases
+*.db
+*.sqlite
+test_migrations.db
+
+# Logs
+*.log
+
+# Tooling / IDE folders
+.mimocode/
+.agents/
+.vscode/
+.idea/
+*.txt
+*.pdf
+*.html
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/

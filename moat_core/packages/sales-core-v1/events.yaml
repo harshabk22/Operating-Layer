@@ -1,0 +1,74 @@
+events:
+  - LeadCreated
+  - LeadQualified
+  - ProposalSent
+  - OpportunityWon
+  - OpportunityLost
+  - PaymentRecorded
+  - InvoiceCreated:
+      payload_schema:
+        invoice_id: string
+        amount: number
+        currency: string
+        customer_id: string
+      triggering_command: CreateInvoice
+      resulting_projections:
+        - InvoiceModel
+        - FinancialLedger
+  - InvoiceApproved:
+      payload_schema:
+        invoice_id: string
+        approver_id: string
+      triggering_command: ApproveInvoice
+      resulting_projections:
+        - InvoiceModel
+  - InvoiceSent:
+      payload_schema:
+        invoice_id: string
+        sent_at: datetime
+      triggering_command: SendInvoice
+      resulting_projections:
+        - InvoiceModel
+  - PaymentRequested:
+      payload_schema:
+        invoice_id: string
+        amount: number
+      triggering_command: RequestPayment
+      resulting_projections:
+        - PaymentModel
+  - PaymentReceived:
+      payload_schema:
+        payment_id: string
+        invoice_id: string
+        amount: number
+      triggering_command: RecordPayment
+      resulting_projections:
+        - PaymentModel
+        - FinancialLedger
+        - RevenueModel
+  - CommissionCalculated:
+      payload_schema:
+        payment_id: string
+        salesperson_id: string
+        amount: number
+      triggering_command: CalculateCommission
+      resulting_projections:
+        - CommissionModel
+  - RevenueRecognized:
+      payload_schema:
+        invoice_id: string
+        amount: number
+        recognized_at: datetime
+      triggering_command: RecognizeRevenue
+      resulting_projections:
+        - RevenueModel
+        - FinancialLedger
+  - RefundIssued:
+      payload_schema:
+        payment_id: string
+        amount: number
+        reason: string
+      triggering_command: IssueRefund
+      resulting_projections:
+        - PaymentModel
+        - FinancialLedger

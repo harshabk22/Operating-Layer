@@ -1,0 +1,29 @@
+graph TD
+    subgraph Package System
+        PR[Package Registry] --> PV[Package Validator]
+        PV --> DR[Dependency Resolver]
+        DR --> VP[Version Pinning]
+        VP --> PI[Package Installer]
+    end
+
+    subgraph Package Artifacts
+        Pkg[Package Definition]
+        Pkg -.-> Actors[Actors]
+        Pkg -.-> Assets[Assets]
+        Pkg -.-> StateMachines[State Machines]
+        Pkg -.-> Constraints[Constraints]
+        Pkg -.-> Triggers[Triggers]
+        Pkg -.-> Capabilities[Capabilities]
+        Pkg -.-> BudgetPolicy[Budget Policy]
+    end
+    
+    subgraph Versioning
+        CV[Case Version Pinning]
+        NewCase[New Case] -->|Uses| Latest[Latest Approved Version]
+        ActiveCase[Active Case] -->|Pinned To| Specific[Specific Package Version]
+    end
+    
+    PR -.-> Pkg
+
+    classDef rules fill:#f9f,stroke:#333,stroke-width:2px;
+    Rules[Rules:<br/>- Active cases never migrate versions.<br/>- Multiple package versions run simultaneously.<br/>- Package cannot create runtime primitives.<br/>- New Cases use latest approved version.]:::rules

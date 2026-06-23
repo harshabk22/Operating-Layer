@@ -1,0 +1,32 @@
+asset:
+  name: Opportunity
+  description: Represents a potential sales deal with a prospective or existing customer.
+  ownership:
+    domain: sales-core-v1
+    owner: sales-ops
+  lifecycle:
+    states:
+      - Prospecting
+      - Qualification
+      - Proposal
+      - Negotiation
+      - Closed Won
+      - Closed Lost
+    transitions:
+      - from: Prospecting
+        to: Qualification
+      - from: Qualification
+        to: Proposal
+      - from: Proposal
+        to: Negotiation
+      - from: Negotiation
+        to: Closed Won
+      - from: Negotiation
+        to: Closed Lost
+  constraints:
+    - Expected revenue must be non-negative.
+    - Close date must be in the future during Prospecting/Qualification.
+    - Must have an associated Account and Contact.
+  evidence_requirements:
+    - Proposal document must be attached to enter 'Proposal' state.
+    - Customer sign-off or contract must be attached for 'Closed Won'.

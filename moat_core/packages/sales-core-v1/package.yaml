@@ -1,0 +1,32 @@
+name: sales-core
+version: 1.0.0
+description: Universal Sales Core Validation & Production Package
+dependencies: []
+
+components:
+  - file: actors.yaml
+    type: Actors
+  - file: assets/opportunity.yaml
+    type: Assets
+  - file: assets/quote.yaml
+    type: Assets
+  - file: assets/invoice.yaml
+    type: Assets
+  - file: assets/payment.yaml
+    type: Assets
+  - file: state_machine.yaml
+    type: StateMachine
+  - file: constraints.yaml
+    type: Constraints
+  - file: actions.yaml
+    type: Actions
+  - file: approvals.yaml
+    type: Approvals
+  - file: commands.yaml
+    type: Commands
+  - file: events.yaml
+    type: Events
+  - file: read_models.yaml
+    type: ReadModels
+  - file: scheduled_events.yaml
+    type: ScheduledEvents

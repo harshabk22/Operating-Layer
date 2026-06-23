@@ -1,0 +1,19 @@
+actors:
+  - name: Lead
+    description: A potential customer or prospect who has shown interest in the product or service.
+  - name: Customer
+    description: An individual or business that has purchased products or services.
+  - name: Sales Representative
+    description: A person responsible for selling products or services to customers.
+  - name: Sales Manager
+    description: A person who leads and manages a team of sales representatives.
+  - name: Operator
+    description: A person responsible for managing operational tasks related to sales.
+  - name: Business Owner
+    description: The owner or primary stakeholder of the business utilizing the sales system.
+
+organizations:
+  - name: Team
+    description: A group of individuals working together, such as a sales team.
+  - name: Department
+    description: A distinct division within the business, such as the Sales Department.

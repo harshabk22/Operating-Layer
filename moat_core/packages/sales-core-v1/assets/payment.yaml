@@ -1,0 +1,20 @@
+asset:
+  name: Payment
+  description: A transfer of funds from a customer to fulfill an invoice obligation.
+  ownership:
+    domain: sales-core-v1
+    owner: accounts-receivable
+  lifecycle:
+    states:
+      - Initiated
+      - Processing
+      - Settled
+      - Failed
+      - Refunded
+  constraints:
+    - Payment amount must be strictly positive.
+    - Must reference at least one valid Invoice.
+    - Currency must match the invoice currency.
+  evidence_requirements:
+    - Gateway receipt or transaction ID required for Settled state.
+    - Bank statement confirmation for reconciliation.

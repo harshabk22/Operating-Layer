@@ -1,0 +1,6 @@
+actions:
+  - SendProposal
+  - RequestApproval
+  - CreateInvoice
+  - ScheduleMeeting
+  - CloseOpportunity

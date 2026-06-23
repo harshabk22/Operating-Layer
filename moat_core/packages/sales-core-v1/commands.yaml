@@ -1,0 +1,7 @@
+commands:
+  - CreateLead
+  - QualifyLead
+  - SendProposal
+  - WinOpportunity
+  - LoseOpportunity
+  - RecordPayment

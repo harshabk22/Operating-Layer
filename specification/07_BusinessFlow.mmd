@@ -1,0 +1,23 @@
+graph LR
+    Lead[Lead] --> Qual[Qualification]
+    Qual --> Prop[Proposal]
+    Prop --> SE[Scheduled Event]
+    SE --> Neg[Negotiation]
+    Neg --> Trans[Transaction]
+    Trans --> Comp[Completion]
+
+    %% Invalidation Loop
+    Neg -.->|Evidence Invalidated| Susp[Suspended / Non-Compliant]
+    Trans -.->|Evidence Invalidated| Susp
+    Susp -->|New Event Resolution| Neg
+
+    subgraph Supported Verticals Without Runtime Modifications
+        HC[Healthcare]
+        Rec[Recruitment]
+        RE[Real Estate]
+        Ins[Insurance]
+        Edu[Education]
+    end
+
+    classDef rules fill:#f9f,stroke:#333,stroke-width:2px;
+    Rules[Rules:<br/>- Never rewind history.<br/>- Only move forward through new events.]:::rules

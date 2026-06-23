@@ -1,0 +1,98 @@
+read_models:
+  - name: LeadFunnelView
+    projection_source_events:
+      - LeadCreated
+      - LeadStatusChanged
+      - LeadConverted
+      - LeadDisqualified
+    update_rules:
+      - "Update lead status on LeadStatusChanged."
+      - "Remove from funnel or mark as converted on LeadConverted."
+      - "Mark as disqualified on LeadDisqualified."
+    query_api_names:
+      - getLeadFunnel
+      - getLeadsByStage
+  - name: OpportunityPipelineView
+    projection_source_events:
+      - OpportunityCreated
+      - OpportunityStageChanged
+      - OpportunityAmountUpdated
+      - OpportunityClosedWon
+      - OpportunityClosedLost
+    update_rules:
+      - "Update opportunity stage and probability on OpportunityStageChanged."
+      - "Update value on OpportunityAmountUpdated."
+      - "Move to closed pipeline and lock on OpportunityClosedWon or OpportunityClosedLost."
+    query_api_names:
+      - getOpportunityPipeline
+      - getOpportunitiesByStage
+  - name: RevenueForecastView
+    projection_source_events:
+      - OpportunityCreated
+      - OpportunityStageChanged
+      - OpportunityAmountUpdated
+      - OpportunityClosedWon
+      - OpportunityClosedLost
+    update_rules:
+      - "Calculate weighted expected revenue based on amount and probability."
+      - "Update forecast totals when amounts or stages change."
+      - "Include in realized revenue on OpportunityClosedWon."
+    query_api_names:
+      - getRevenueForecast
+      - getForecastByQuarter
+  - name: PendingApprovalsView
+    projection_source_events:
+      - QuoteCreated
+      - QuoteApprovalRequested
+      - QuoteApproved
+      - QuoteRejected
+      - DiscountRequested
+      - DiscountApproved
+      - DiscountRejected
+    update_rules:
+      - "Add to pending list on QuoteApprovalRequested or DiscountRequested."
+      - "Remove from pending list on Approved or Rejected events."
+    query_api_names:
+      - getPendingApprovals
+      - getApprovalsByApprover
+  - name: ActivityTimelineView
+    projection_source_events:
+      - ActivityLogged
+      - EmailSent
+      - CallLogged
+      - MeetingScheduled
+      - MeetingCompleted
+    update_rules:
+      - "Append new activities to timeline."
+      - "Sort by timestamp descending."
+    query_api_names:
+      - getActivityTimeline
+      - getActivitiesByEntity
+  - name: ScheduledEventsView
+    projection_source_events:
+      - MeetingScheduled
+      - MeetingRescheduled
+      - MeetingCancelled
+      - TaskCreated
+      - TaskCompleted
+    update_rules:
+      - "Add event to schedule on MeetingScheduled or TaskCreated."
+      - "Update timing on MeetingRescheduled."
+      - "Remove or mark inactive on MeetingCancelled or TaskCompleted."
+    query_api_names:
+      - getScheduledEvents
+      - getUpcomingEvents
+  - name: SLAViolationView
+    projection_source_events:
+      - LeadCreated
+      - LeadStatusChanged
+      - OpportunityCreated
+      - OpportunityStageChanged
+      - SLAViolationDetected
+    update_rules:
+      - "Track time since last interaction or creation."
+      - "Record violation on SLAViolationDetected."
+      - "Clear or reset timer on status/stage change."
+    query_api_names:
+      - getSLAViolations
+      - getAtRiskEntities

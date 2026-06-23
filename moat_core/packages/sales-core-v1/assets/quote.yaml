@@ -1,0 +1,22 @@
+asset:
+  name: Quote
+  description: A formal offer of products/services at specified prices to a customer.
+  ownership:
+    domain: sales-core-v1
+    owner: revenue-management
+  lifecycle:
+    states:
+      - Draft
+      - Review
+      - Approved
+      - Presented
+      - Accepted
+      - Rejected
+      - Expired
+  constraints:
+    - Total amount must equal the sum of line items.
+    - Discount cannot exceed maximum allowable percentage without approval.
+    - Must reference a valid Opportunity.
+  evidence_requirements:
+    - Management approval required for discounts > 15%.
+    - Customer signature required for transition to Accepted.

@@ -1,0 +1,671 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+use dashmap::DashMap;
+use serde::Serialize;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+use tokio::sync::oneshot;
+use uuid::Uuid;
+
+use crate::agent::execution::journal_chain::{ChainJournal, JournalOperation};
+use crate::agent::interaction_orchestrator::ActionIntent;
+use crate::memory::meta_brain::ExecutionPolicy;
+use crate::memory::rule_store::RuleConflictReview;
+use crate::memory::skills::{sha256_hex, SkillProposal};
+use crate::{MoatError, MoatResult};
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentDecision {
+    ApproveOnce,
+    Deny,
+    GrantSession,
+    CreatePermanentPolicy,
+}
+
+impl ConsentDecision {
+    pub fn is_approved(self) -> bool {
+        matches!(
+            self,
+            Self::ApproveOnce | Self::GrantSession | Self::CreatePermanentPolicy
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskTier {
+    Passive,
+    Staged,
+    Committed,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantScope {
+    SingleUse,
+    Session,
+    Permanent,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubSpawnPolicyRequest {
+    pub source_worker: String,
+    pub target_worker: String,
+    pub allowed_tool: String,
+    pub can_create_permanent_policy: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillReviewRequest {
+    pub skill_name: String,
+    pub description: String,
+    pub source_code: String,
+    pub code_hash: String,
+    pub language: String,
+    pub parameter_schema: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConsentRequest {
+    pub request_id: String,
+    pub session_id: String,
+    pub action: String,
+    pub summary: String,
+    pub payload: String,
+    pub summary_hash: String,
+    pub payload_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_review: Option<RuleConflictReview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_spawn_policy: Option<SubSpawnPolicyRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_review: Option<SkillReviewRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_tier: Option<RiskTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_scopes: Option<Vec<GrantScope>>,
+}
+
+pub type EmitFn = Box<dyn Fn(ConsentRequest) + Send + Sync + 'static>;
+
+pub struct ConsentBridge {
+    pending: DashMap<String, oneshot::Sender<ConsentDecision>>,
+    choice_pending: DashMap<String, oneshot::Sender<String>>,
+    emit: EmitFn,
+    chain_journal: Mutex<Option<ChainJournal>>,
+    pub spawn_consent_timestamps: DashMap<String, Vec<std::time::Instant>>,
+}
+
+#[derive(Serialize)]
+
+struct GenericConsentPayload<'a> {
+    action: &'a str,
+    payload: &'a str,
+}
+
+/// Strip `<thinking>...</thinking>` blocks, code fences, and LLM system fluff
+/// from a string, returning a clean human-readable sentence.
+pub fn clean_consent_summary(raw: &str) -> String {
+    static RE_THINKING: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?is)<thinking>.*?</thinking>").unwrap());
+    static RE_FENCE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?s)```.*?```").unwrap());
+    let stripped = RE_THINKING.replace_all(raw, "");
+    let stripped = RE_FENCE.replace_all(&stripped, "");
+    // Collapse whitespace
+    stripped
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+impl ConsentBridge {
+    pub fn new(emit: EmitFn) -> Self {
+        Self {
+            pending: DashMap::new(),
+            choice_pending: DashMap::new(),
+            emit,
+            chain_journal: Mutex::new(None),
+            spawn_consent_timestamps: DashMap::new(),
+        }
+    }
+
+    pub fn with_chain_journal(mut self) -> Result<Self, String> {
+        let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+        let path = home.join(".ageex").join("chain.journal");
+        match ChainJournal::open(&path) {
+            Ok(journal) => {
+                self.chain_journal = Mutex::new(Some(journal));
+                Ok(self)
+            }
+            Err(e) => Err(format!("Failed to open chain journal: {}", e)),
+        }
+    }
+
+    pub async fn request_consent(&self, action: &str, payload: &str) -> bool {
+        self.request_consent_scoped(action, payload, "system", "system-session")
+            .await
+    }
+
+    pub async fn request_consent_scoped(
+        &self,
+        action: &str,
+        payload: &str,
+        _agent_label: &str,
+        session_id: &str,
+    ) -> bool {
+        let summary = build_scoped_consent_summary(action, payload);
+        let payload_bytes = match serde_json::to_vec(&GenericConsentPayload { action, payload }) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                eprintln!("[ConsentBridge] failed to serialize generic payload: {err}");
+                return false;
+            }
+        };
+
+        let s_id = if session_id.is_empty() {
+            "system-session"
+        } else {
+            session_id
+        };
+        match build_generic_consent_request(action, summary, payload_bytes, s_id) {
+            Ok(request) => self.request_with_prebuilt(request).await.is_approved(),
+            Err(err) => {
+                eprintln!("[ConsentBridge] failed to build generic request: {err}");
+                false
+            }
+        }
+    }
+
+    pub async fn request_action_consent(
+        &self,
+        intent: &ActionIntent,
+        agent_label: &str,
+        session_id: &str,
+    ) -> MoatResult<bool> {
+        let request = build_consent_request(intent, agent_label, session_id)?;
+        Ok(self.request_with_prebuilt(request).await.is_approved())
+    }
+
+    pub async fn request_rule_review(
+        &self,
+        session_id: &str,
+        review: RuleConflictReview,
+    ) -> MoatResult<bool> {
+        let summary = format!(
+            "Permission to store learned rule for worker '{}'",
+            review.new_rule.target_worker
+        );
+        let payload = serde_json::to_vec(&review).map_err(MoatError::Serde)?;
+        let mut request =
+            build_generic_consent_request("rule:review", summary, payload, session_id)?;
+        request.rule_review = Some(review);
+        Ok(self.request_with_prebuilt(request).await.is_approved())
+    }
+
+    pub async fn request_sub_spawn_policy(
+        &self,
+        session_id: &str,
+        source_worker: &str,
+        target_worker: &str,
+        allowed_tool: &str,
+    ) -> MoatResult<ConsentDecision> {
+        let now = std::time::Instant::now();
+        let session_key = session_id.to_string();
+        {
+            let mut entry = self
+                .spawn_consent_timestamps
+                .entry(session_key.clone())
+                .or_default();
+            // Prune timestamps older than 60s
+            entry.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(60));
+            if entry.len() >= 5 {
+                eprintln!("[ConsentBridge] Spawn consent rate-limit exceeded ({} prompts in 60s) for session {}", entry.len(), session_id);
+                return Ok(ConsentDecision::Deny);
+            }
+            entry.push(now);
+        }
+
+        let normalized_tool = allowed_tool.trim();
+        let source_lower = source_worker.to_lowercase();
+        let target_lower = target_worker.to_lowercase();
+        let summary = if source_lower.contains("whatsapp") || target_lower.contains("whatsapp") {
+            "Permission for WhatsApp".to_string()
+        } else {
+            format!(
+                "Permission to spawn worker '{}' (delegated from '{}')",
+                target_worker.trim(),
+                source_worker.trim()
+            )
+        };
+        let payload = serde_json::to_vec(&ExecutionPolicy {
+            policy_id: String::new(),
+            source_worker: source_worker.trim().to_string(),
+            target_worker: target_worker.trim().to_string(),
+            allowed_tool: normalized_tool.to_string(),
+            policy_hash: String::new(),
+        })
+        .map_err(MoatError::Serde)?;
+        let mut request =
+            build_generic_consent_request("request_sub_agent", summary, payload, session_id)?;
+        request.sub_spawn_policy = Some(SubSpawnPolicyRequest {
+            source_worker: source_worker.trim().to_string(),
+            target_worker: target_worker.trim().to_string(),
+            allowed_tool: normalized_tool.to_string(),
+            can_create_permanent_policy: true,
+        });
+        Ok(self.request_with_prebuilt(request).await)
+    }
+
+    pub async fn request_skill_review(
+        &self,
+        session_id: &str,
+        _agent_label: &str,
+        proposal: &SkillProposal,
+    ) -> MoatResult<bool> {
+        let summary = format!(
+            "Permission to install skill: {}",
+            proposal.skill_name.trim()
+        );
+        let review = SkillReviewRequest {
+            skill_name: proposal.skill_name.trim().to_string(),
+            description: proposal.description.trim().to_string(),
+            source_code: proposal.source_code.clone(),
+            code_hash: sha256_hex(proposal.source_code.as_bytes()),
+            language: proposal.language.trim().to_string(),
+            parameter_schema: proposal.parameter_schema.clone(),
+        };
+        let payload = serde_json::to_vec(&review).map_err(MoatError::Serde)?;
+        let mut request =
+            build_generic_consent_request("propose_system_skill", summary, payload, session_id)?;
+        request.skill_review = Some(review);
+        Ok(self.request_with_prebuilt(request).await.is_approved())
+    }
+
+    async fn request_with_prebuilt(&self, request: ConsentRequest) -> ConsentDecision {
+        let request_id = request.request_id.clone();
+        let (tx, rx) = oneshot::channel::<ConsentDecision>();
+
+        self.pending.insert(request_id.clone(), tx);
+
+        (self.emit)(request);
+
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_)) => {
+                eprintln!("[ConsentBridge] receiver dropped for request {request_id} — denying");
+                ConsentDecision::Deny
+            }
+            Err(_elapsed) => {
+                eprintln!(
+                    "[ConsentBridge] consent timed out for request {request_id} — auto-denying"
+                );
+                let _ = self.pending.remove(&request_id);
+                ConsentDecision::Deny
+            }
+        }
+    }
+
+    pub fn resolve(&self, request_id: &str, decision: ConsentDecision) -> Result<(), String> {
+        let tx = self.pending.remove(request_id).map(|(_, v)| v);
+
+        // Chain-journal every consent decision
+        if let Ok(mut journal_guard) = self.chain_journal.lock() {
+            if let Some(ref mut journal) = *journal_guard {
+                let op = match decision {
+                    ConsentDecision::ApproveOnce
+                    | ConsentDecision::GrantSession
+                    | ConsentDecision::CreatePermanentPolicy => JournalOperation::Allow {
+                        tool_name: "consent".into(),
+                        args: format!("request_id={}", request_id),
+                    },
+                    ConsentDecision::Deny => JournalOperation::Deny {
+                        tool_name: "consent".into(),
+                        reason: format!("Denied request_id={}", request_id),
+                    },
+                };
+                if let Err(e) = journal.append("consent_bridge".into(), op) {
+                    eprintln!("[ConsentBridge] Chain journal append failed: {}", e);
+                }
+            }
+        }
+
+        match tx {
+            Some(sender) => {
+                let _ = sender.send(decision);
+                Ok(())
+            }
+            None => Err(format!(
+                "ConsentBridge: unknown or already-resolved request_id '{request_id}'"
+            )),
+        }
+    }
+
+    // ── Choice bridge (user:ask_choice pause/resume) ──
+
+    /// Suspend the calling async task until the user selects a choice option.
+    /// Returns the selected option string.
+    pub async fn request_user_choice(&self, request_id: &str) -> String {
+        let (tx, rx) = oneshot::channel::<String>();
+
+        self.choice_pending.insert(request_id.to_string(), tx);
+
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+            Ok(Ok(selection)) => selection,
+            Ok(Err(_)) => {
+                eprintln!("[ConsentBridge] choice receiver dropped for request {request_id} — returning empty");
+                String::new()
+            }
+            Err(_elapsed) => {
+                eprintln!(
+                    "[ConsentBridge] choice timed out for request {request_id} — auto-dismissing"
+                );
+                let _ = self.choice_pending.remove(request_id);
+                String::new()
+            }
+        }
+    }
+
+    /// Resolve a pending user:ask_choice request with the user's selected option.
+    pub fn resolve_choice(&self, request_id: &str, selection: String) -> Result<(), String> {
+        let tx = self.choice_pending.remove(request_id).map(|(_, v)| v);
+
+        match tx {
+            Some(sender) => {
+                let _ = sender.send(selection);
+                Ok(())
+            }
+            None => Err(format!(
+                "ConsentBridge: unknown or already-resolved choice request_id '{request_id}'"
+            )),
+        }
+    }
+}
+
+pub fn build_human_summary(intent: &ActionIntent, _agent_label: &str) -> String {
+    let payload_lower = intent
+        .payload
+        .as_ref()
+        .map(|p| p.to_string().to_lowercase())
+        .unwrap_or_default();
+    let target_lower = intent.target.to_lowercase();
+    let action_lower = intent.action.to_lowercase();
+
+    if target_lower.contains("whatsapp")
+        || payload_lower.contains("whatsapp")
+        || action_lower.contains("whatsapp")
+    {
+        return "Permission for WhatsApp".to_string();
+    }
+
+    match intent.action.as_str() {
+        "fs:write" => {
+            let filename = std::path::Path::new(&intent.target)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&intent.target);
+            format!("Permission to write file: {}", filename)
+        }
+        "fs:read" => {
+            let filename = std::path::Path::new(&intent.target)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&intent.target);
+            format!("Permission to read file: {}", filename)
+        }
+        "fs:delete" => {
+            let filename = std::path::Path::new(&intent.target)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&intent.target);
+            format!("Permission to delete file: {}", filename)
+        }
+        "process:spawn" => {
+            let binary_name = std::path::Path::new(&intent.target)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&intent.target);
+            format!("Permission to run command: {}", binary_name)
+        }
+        "net:curl" => {
+            let host = if let Ok(url) = url::Url::parse(&intent.target) {
+                url.host_str().unwrap_or(&intent.target).to_string()
+            } else if let Ok(url) = url::Url::parse(&format!("http://{}", intent.target)) {
+                url.host_str().unwrap_or(&intent.target).to_string()
+            } else {
+                intent.target.clone()
+            };
+            format!("Permission for network connection to {}", host)
+        }
+        "propose_system_skill" => {
+            if let Some(obj) = intent.payload.as_ref().and_then(|v| v.as_object()) {
+                let name = obj
+                    .get("skill_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                format!("Permission to install skill: {}", name)
+            } else {
+                "Permission to install skill".to_string()
+            }
+        }
+        _ => format!("Permission to invoke tool: {}", intent.action),
+    }
+}
+
+pub fn build_scoped_consent_summary(action: &str, payload: &str) -> String {
+    let payload_lower = payload.to_lowercase();
+    let action_lower = action.to_lowercase();
+
+    if action_lower.contains("whatsapp") || payload_lower.contains("whatsapp") {
+        return "Permission for WhatsApp".to_string();
+    }
+
+    match action {
+        "permission:file" => {
+            let path_part = payload.split("access to ").nth(1).unwrap_or(payload).trim();
+            let basename = std::path::Path::new(path_part)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path_part);
+
+            if payload_lower.contains("write") {
+                format!("Permission to write file: {}", basename)
+            } else if payload_lower.contains("delete") {
+                format!("Permission to delete file: {}", basename)
+            } else {
+                format!("Permission to read file: {}", basename)
+            }
+        }
+        "permission:app" => {
+            let app_part = payload
+                .split("access to app ")
+                .nth(1)
+                .unwrap_or(payload)
+                .trim();
+            format!("Permission to open application: {}", app_part)
+        }
+        "permission:url_scheme" => {
+            let scheme_part = payload
+                .split("URL scheme ")
+                .nth(1)
+                .unwrap_or(payload)
+                .trim();
+            format!("Permission for URL scheme: {}", scheme_part)
+        }
+        "permission:tool" => {
+            let tool_part = payload
+                .split("access to tool ")
+                .nth(1)
+                .unwrap_or(payload)
+                .trim();
+            format!("Permission to use tool: {}", tool_part)
+        }
+        "fs:write" => {
+            let path_part = payload.strip_prefix("Write: ").unwrap_or(payload).trim();
+            let basename = std::path::Path::new(path_part)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path_part);
+            format!("Permission to write file: {}", basename)
+        }
+        "fs:read" => {
+            let path_part = payload.strip_prefix("Read: ").unwrap_or(payload).trim();
+            let basename = std::path::Path::new(path_part)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path_part);
+            format!("Permission to read file: {}", basename)
+        }
+        "fs:delete" => {
+            let path_part = payload.strip_prefix("Delete: ").unwrap_or(payload).trim();
+            let basename = std::path::Path::new(path_part)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path_part);
+            format!("Permission to delete file: {}", basename)
+        }
+        "process:spawn" => {
+            let cmd_part = payload.strip_prefix("Run: ").unwrap_or(payload).trim();
+            let cmd_binary = cmd_part.split_whitespace().next().unwrap_or(cmd_part);
+            let basename = std::path::Path::new(cmd_binary)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(cmd_binary);
+            format!("Permission to run command: {}", basename)
+        }
+        "net:curl" => {
+            let host_part = payload
+                .strip_prefix("HTTP request to ")
+                .unwrap_or(payload)
+                .trim();
+            let host = if let Ok(url) = url::Url::parse(host_part) {
+                url.host_str().unwrap_or(host_part).to_string()
+            } else if let Ok(url) = url::Url::parse(&format!("http://{}", host_part)) {
+                url.host_str().unwrap_or(host_part).to_string()
+            } else {
+                host_part.to_string()
+            };
+            format!("Permission for network connection to {}", host)
+        }
+        _ => {
+            format!("Permission to invoke tool: {}", action)
+        }
+    }
+}
+
+pub fn build_execution_payload(intent: &ActionIntent) -> MoatResult<Vec<u8>> {
+    serde_json::to_vec(intent).map_err(MoatError::Serde)
+}
+
+pub fn build_consent_request(
+    intent: &ActionIntent,
+    agent_label: &str,
+    session_id: &str,
+) -> MoatResult<ConsentRequest> {
+    let summary = build_human_summary(intent, agent_label);
+    let payload_bytes = build_execution_payload(intent)?;
+    build_generic_consent_request(&intent.action, summary, payload_bytes, session_id)
+}
+
+pub fn build_generic_consent_request(
+    action: &str,
+    summary: String,
+    payload_bytes: Vec<u8>,
+    session_id: &str,
+) -> MoatResult<ConsentRequest> {
+    let summary_hash = sha256_hex(summary.as_bytes());
+    let payload_hash = sha256_hex(&payload_bytes);
+
+    if summary_hash == payload_hash {
+        return Err(MoatError::InvariantViolation(
+            "consent::build_consent_request: summary_hash == payload_hash".into(),
+        ));
+    }
+
+    Ok(ConsentRequest {
+        request_id: Uuid::new_v4().to_string(),
+        session_id: session_id.to_string(),
+        action: action.to_string(),
+        summary,
+        payload: BASE64_STANDARD.encode(payload_bytes),
+        summary_hash,
+        payload_hash,
+        rule_review: None,
+        sub_spawn_policy: None,
+        skill_review: None,
+        risk_tier: None,
+        available_scopes: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_consent_request, build_generic_consent_request, ConsentRequest};
+    use crate::agent::interaction_orchestrator::ActionIntent;
+    use serde_json::json;
+
+    #[test]
+    fn consent_request_json_contract_roundtrip() {
+        let req = ConsentRequest {
+            request_id: "abc-123".into(),
+            session_id: "session-1".into(),
+            action: "operator:escalate".into(),
+            summary: "Agent 'business_engine' requesting escalation for thread 'thread-123'".into(),
+            payload: "eyJhY3Rpb24iOiJvczphcHBsZXNjcmlwdCJ9".into(),
+            summary_hash: "hash-a".into(),
+            payload_hash: "hash-b".into(),
+            rule_review: None,
+            sub_spawn_policy: None,
+            skill_review: None,
+            risk_tier: None,
+            available_scopes: None,
+        };
+
+        let json = serde_json::to_string(&req).expect("serialize consent request");
+        assert!(json.contains("\"request_id\""));
+        assert!(json.contains("\"session_id\""));
+        assert!(json.contains("\"action\""));
+        assert!(json.contains("\"payload\""));
+
+        let decoded: ConsentRequest =
+            serde_json::from_str(&json).expect("deserialize consent request");
+        assert_eq!(decoded.request_id, req.request_id);
+        assert_eq!(decoded.session_id, req.session_id);
+        assert_eq!(decoded.action, req.action);
+        assert_eq!(decoded.summary, req.summary);
+        assert_eq!(decoded.payload, req.payload);
+        assert_eq!(decoded.summary_hash, req.summary_hash);
+        assert_eq!(decoded.payload_hash, req.payload_hash);
+    }
+
+    #[test]
+    fn structured_consent_hashes_are_distinct() {
+        let intent = ActionIntent {
+            reason: None,
+            thought: None,
+            action: "fs:write".into(),
+            target: "notes/today.md".into(),
+            payload: Some(json!("hello world")),
+        };
+
+        let req = build_consent_request(&intent, "coder", "session-1").expect("build consent");
+        assert_ne!(req.summary_hash, req.payload_hash);
+    }
+
+    #[test]
+    fn generic_consent_hashes_are_distinct() {
+        let req = build_generic_consent_request(
+            "permission:file",
+            "hello".to_string(),
+            vec![1, 2, 3],
+            "session-1",
+        )
+        .expect("build generic consent");
+        assert_ne!(req.summary_hash, req.payload_hash);
+    }
+}

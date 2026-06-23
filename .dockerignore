@@ -1,0 +1,10 @@
+target/
+node_modules/
+.git/
+*.db
+.ageex/
+frontend/node_modules/
+frontend/dist/
+e2e/test-results/
+e2e/playwright-report/
+moat_core/target/

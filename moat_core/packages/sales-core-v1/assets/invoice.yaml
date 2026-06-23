@@ -1,0 +1,21 @@
+asset:
+  name: Invoice
+  description: A commercial document issued to a customer, relating to a sale transaction and indicating the products, quantities, and agreed prices.
+  ownership:
+    domain: sales-core-v1
+    owner: billing-team
+  lifecycle:
+    states:
+      - Draft
+      - Issued
+      - Partially Paid
+      - Paid
+      - Overdue
+      - Cancelled
+  constraints:
+    - Must be linked to an Accepted Quote or Contract.
+    - Invoice date cannot be in the future.
+    - Due date must be strictly after the invoice date.
+  evidence_requirements:
+    - Proof of delivery or service fulfillment may be required for Issuance.
+    - Bank reconciliation evidence required for transition to Paid.

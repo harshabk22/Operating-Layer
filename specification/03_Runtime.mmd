@@ -1,0 +1,47 @@
+graph TD
+    subgraph Event Sourcing & State
+        T[Trigger] --> C[Command]
+        C --> CV[Constraint Validation]
+        CV --> ECr[Event Creation]
+        ECr --> ES[(Event Store)]
+        ES --> PW[Projection Worker]
+        PW --> SP[(State Projection)]
+        SP --> RM[(Read Models)]
+    end
+
+    subgraph Snapshot & Replay
+        ES --> SB[Snapshot Builder]
+        SB --> SS[(Snapshot Store)]
+        CL[Case Load] --> SS
+        CL -->|Replay Remaining| ES
+    end
+
+    subgraph Action & Execution
+        ES -->|Event Stream| ACr[Action Creation]
+        ACr --> A[Action]
+        A --> EQ[Execution Queue]
+        EQ --> BC[Budget Check]
+        BC --> CB[Circuit Breaker Check]
+        CB --> E[Execution]
+        E --> Cap[Capability]
+        Cap --> EP[External Provider]
+    end
+
+    subgraph Scheduling & Availability
+        Sched[Scheduler] --> QA[Query Availability]
+        QA --> CSE[Create ScheduledEvent]
+        CSE --> C
+    end
+
+    subgraph Evidence Invalidation
+        EIE[EvidenceInvalidated Event] --> CRE[Constraint Re-Evaluation]
+        CRE --> Sus[Case Suspended/Non-Compliant]
+    end
+
+    subgraph Operations & Incidents
+        EP -.-> I[Incident]
+        I --> OS[Operational Supervisor]
+        I --> CBus[Command Bus]
+        I --> AppE[Approval Engine]
+        I -- Pause/Resume --> EQ
+    end

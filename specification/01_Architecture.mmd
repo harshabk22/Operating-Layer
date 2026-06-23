@@ -1,0 +1,71 @@
+graph TD
+    subgraph Dashboard
+        UI[Web Dashboard]
+    end
+
+    subgraph Connection Layer
+        Ingress[Ingress Connections]
+        Egress[Egress Connections]
+    end
+
+    subgraph Runtime
+        CommandBus[Command Bus]
+        ConstraintValidator[Constraint Validator]
+        EventCreator[Event Creator]
+        ProjectionWorker[Projection Worker]
+        ExecutionEngine[Execution Engine]
+        CapabilityRouter[Capability Router]
+        BudgetEngine[Budget Engine]
+        CircuitBreakers[Circuit Breakers]
+        AvailabilityEngine[Availability Engine]
+        Scheduler[Scheduler]
+        IncidentManager[Incident Manager]
+        OpSupervisor[Operational Supervisor]
+        ApprovalEngine[Approval Engine]
+        SnapshotBuilder[Snapshot Builder]
+        CaseLoader[Case Loader]
+    end
+
+    subgraph Data Layer
+        EventStore[(Event Store)]
+        StateProjection[(State Projection)]
+        ReadModels[(Read Models)]
+        SnapshotStore[(Snapshot Store)]
+    end
+
+    subgraph Package System
+        Registry[Package Registry]
+    end
+
+    UI --> ConnectionLayer
+    ConnectionLayer --> CommandBus
+    
+    CommandBus --> ConstraintValidator
+    ConstraintValidator --> EventCreator
+    EventCreator --> EventStore
+    
+    EventStore --> ProjectionWorker
+    ProjectionWorker --> StateProjection
+    StateProjection --> ReadModels
+    ReadModels --> UI
+    
+    EventStore --> SnapshotBuilder
+    SnapshotBuilder --> SnapshotStore
+    SnapshotStore --> CaseLoader
+    EventStore --> CaseLoader
+    
+    CaseLoader --> ExecutionEngine
+    ExecutionEngine --> BudgetEngine
+    ExecutionEngine --> CircuitBreakers
+    ExecutionEngine --> CapabilityRouter
+    CapabilityRouter --> Egress
+    
+    Scheduler --> AvailabilityEngine
+    AvailabilityEngine --> CommandBus
+    
+    IncidentManager --> OpSupervisor
+    IncidentManager --> CommandBus
+    IncidentManager --> ApprovalEngine
+    IncidentManager -- Pause/Resume --> ExecutionEngine
+    
+    Registry --> Runtime

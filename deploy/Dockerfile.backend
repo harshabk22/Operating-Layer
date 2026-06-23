@@ -1,0 +1,16 @@
+FROM rust:latest AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p moat_core
+
+FROM ubuntu:24.04
+WORKDIR /app
+RUN apt-get update && apt-get install -y sqlite3 libsqlite3-dev ca-certificates openssl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/moat-core /usr/local/bin/moat-core
+RUN mkdir -p /root/.ageex
+ENV PORT=8080
+ENV WHATSAPP_PORT=8081
+ENV NON_INTERACTIVE=1
+EXPOSE 8080
+EXPOSE 8081
+CMD ["moat-core"]

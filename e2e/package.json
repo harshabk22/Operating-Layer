@@ -1,0 +1,12 @@
+{
+  "name": "moat-ageex-e2e",
+  "version": "1.0.0",
+  "description": "Playwright E2E Tests for MoatAgeex",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.42.0",
+    "typescript": "^5.3.3"
+  }
+}

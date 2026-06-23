@@ -1,0 +1,5 @@
+scheduled_events:
+  - event: Demo
+  - event: Consultation
+  - event: Negotiation Call
+  - event: Follow Up Call
