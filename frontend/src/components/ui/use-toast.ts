@@ -9,10 +9,11 @@ export function useToast() {
   }, []);
   return {
     toast: (t: any) => {
-      memoryState = [...memoryState, { id: Date.now(), ...t }];
+      const id = Date.now();
+      memoryState = [...memoryState, { id, ...t }];
       listeners.forEach(l => l(memoryState));
       setTimeout(() => {
-        memoryState = memoryState.filter(x => x.id !== t.id);
+        memoryState = memoryState.filter(x => x.id !== id);
         listeners.forEach(l => l(memoryState));
       }, 3000);
     },

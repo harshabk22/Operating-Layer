@@ -82,6 +82,8 @@ pub enum NodeKind {
     App,
     UrlScheme,
     Tool,
+    Skill,
+    Workflow,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -576,6 +578,30 @@ impl MetaBrain {
         }
         self.ensure_base_hierarchy();
         self.mark_dirty();
+    }
+
+    pub fn get_synthesized_skills(&self) -> Vec<crate::memory::skills::SynthesizedSkill> {
+        let mut skills = Vec::new();
+        for node in self.inner.graph.node_weights() {
+            if node.kind == NodeKind::Skill && node.key.starts_with("skill:synthesized:") {
+                if let Ok(skill) = serde_json::from_str::<crate::memory::skills::SynthesizedSkill>(&node.resource) {
+                    skills.push(skill);
+                }
+            }
+        }
+        skills
+    }
+
+    pub fn get_instruction_skills(&self) -> Vec<crate::memory::skills::SkillDefinition> {
+        let mut skills = Vec::new();
+        for node in self.inner.graph.node_weights() {
+            if node.kind == NodeKind::Skill && node.key.starts_with("skill:static:") {
+                if let Ok(skill) = serde_json::from_str::<crate::memory::skills::SkillDefinition>(&node.resource) {
+                    skills.push(skill);
+                }
+            }
+        }
+        skills
     }
 
     fn reserve_id(&mut self) -> NodeId {
@@ -1487,7 +1513,7 @@ impl MetaBrain {
                         tools.insert(node.resource.clone());
                     }
                 }
-                NodeKind::Root | NodeKind::Scope => {}
+                NodeKind::Root | NodeKind::Scope | NodeKind::Skill | NodeKind::Workflow => {}
             }
         }
 
@@ -1614,7 +1640,7 @@ impl MetaBrain {
                         subgraph.allowed_tools.push(node.resource.clone());
                     }
                 }
-                NodeKind::Root | NodeKind::Scope => {}
+                NodeKind::Root | NodeKind::Scope | NodeKind::Skill | NodeKind::Workflow => {}
             }
         }
 
@@ -1813,7 +1839,7 @@ impl MetaBrain {
                         rules.insert(format!("(allow process-exec (tool \"{}\"))", node.resource));
                     }
                 }
-                NodeKind::Root | NodeKind::Scope => {}
+                NodeKind::Root | NodeKind::Scope | NodeKind::Skill | NodeKind::Workflow => {}
             }
         }
 

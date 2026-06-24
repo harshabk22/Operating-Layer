@@ -1,32 +1,34 @@
+id: sales-core-v1
 name: sales-core
 version: 1.0.0
 description: Universal Sales Core Validation & Production Package
-dependencies: []
-
-components:
-  - file: actors.yaml
-    type: Actors
-  - file: assets/opportunity.yaml
-    type: Assets
-  - file: assets/quote.yaml
-    type: Assets
-  - file: assets/invoice.yaml
-    type: Assets
-  - file: assets/payment.yaml
-    type: Assets
-  - file: state_machine.yaml
-    type: StateMachine
-  - file: constraints.yaml
-    type: Constraints
-  - file: actions.yaml
-    type: Actions
-  - file: approvals.yaml
-    type: Approvals
-  - file: commands.yaml
-    type: Commands
-  - file: events.yaml
-    type: Events
-  - file: read_models.yaml
-    type: ReadModels
-  - file: scheduled_events.yaml
-    type: ScheduledEvents
+routes:
+  - path: /sales/leads
+    component: Leads
+  - path: /sales/opportunities
+    component: Opportunities
+navigation_entries:
+  - label: Sales
+    items:
+      - label: Leads
+        path: /sales/leads
+        icon: MessageSquare
+      - label: Opportunities
+        path: /sales/opportunities
+        icon: TrendingUp
+permissions:
+  - sales:leads:read
+  - sales:leads:write
+commands:
+  - CreateLead
+  - QualifyLead
+events:
+  - LeadCreated
+  - LeadQualified
+projections:
+  - LeadsList
+skills:
+  - sales_skill
+tools:
+  - sales_lead_creator
+  - sales_lead_qualifier

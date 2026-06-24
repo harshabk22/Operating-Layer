@@ -123,7 +123,7 @@ mod tests {
         let res = client.get(&base_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = res.text().await.unwrap();
-        assert!(body.contains("Moat Control Surface"));
+        assert!(body.contains("MoatAgeex"));
 
         // 2. Verify that unauthenticated requests to API endpoints return 401 Unauthorized
         let res = client

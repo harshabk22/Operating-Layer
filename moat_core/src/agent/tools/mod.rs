@@ -97,3 +97,59 @@ impl ToolReversibility {
         }
     }
 }
+
+use std::sync::RwLock;
+use std::sync::OnceLock;
+
+pub static GLOBAL_TOOL_REGISTRY: OnceLock<RwLock<ToolRegistry>> = OnceLock::new();
+
+pub fn global_registry() -> &'static RwLock<ToolRegistry> {
+    GLOBAL_TOOL_REGISTRY.get_or_init(|| {
+        let mut reg = ToolRegistry::new();
+        reg.register(ToolEntry::new(SimpleTool { name: "identity:resolve", description: "Resolve messaging handle/channel to a contact ID. Creates a new contact if not found.", reversibility: ToolReversibility::Reversible }));
+        reg.register(ToolEntry::new(SimpleTool { name: "opportunity:classify", description: "Classify or update the lead/opportunity status for an interaction thread.", reversibility: ToolReversibility::Staged }));
+        reg.register(ToolEntry::new(SimpleTool { name: "engagement:propose", description: "Propose a new engagement or booking for a contact.", reversibility: ToolReversibility::Staged }));
+        reg.register(ToolEntry::new(SimpleTool { name: "engagement:request_authorization", description: "Request operator approval for a proposed engagement before it is executed.", reversibility: ToolReversibility::Reversible }));
+        reg.register(ToolEntry::new(SimpleTool { name: "engagement:authorize", description: "Authorize and execute a pending engagement via the scheduling integration.", reversibility: ToolReversibility::Reversible }));
+        reg.register(ToolEntry::new(SimpleTool { name: "operator:escalate", description: "Escalate the conversation thread to a human operator.", reversibility: ToolReversibility::Reversible }));
+        reg.register(ToolEntry::new(SimpleTool { name: "knowledge:query", description: "Query the organizational knowledge base. Use when you need info to answer customer questions.", reversibility: ToolReversibility::Reversible }));
+        reg.register(ToolEntry::new(SimpleTool { name: "done", description: "Signal task completion and provide the final response to the user.", reversibility: ToolReversibility::Reversible }));
+        RwLock::new(reg)
+    })
+}
+
+pub struct SimpleTool {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub reversibility: ToolReversibility,
+}
+
+#[async_trait::async_trait]
+impl Tool for SimpleTool {
+    fn name(&self) -> &'static str { self.name }
+    fn description(&self) -> &'static str { self.description }
+    fn parameters(&self) -> Value { serde_json::json!({}) }
+    fn reversibility(&self) -> ToolReversibility { self.reversibility }
+    fn required_permission(&self) -> PermissionFlags { PermissionFlags(0) }
+    async fn execute(&self, _intent: &ActionIntent) -> MoatResult<TaskStatus> {
+        Ok(TaskStatus::Success { stdout: "SimpleTool executed".to_string() })
+    }
+}
+
+pub struct DynamicPackageTool {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub reversibility: ToolReversibility,
+}
+
+#[async_trait::async_trait]
+impl Tool for DynamicPackageTool {
+    fn name(&self) -> &'static str { self.name }
+    fn description(&self) -> &'static str { self.description }
+    fn parameters(&self) -> Value { serde_json::json!({}) }
+    fn reversibility(&self) -> ToolReversibility { self.reversibility }
+    fn required_permission(&self) -> PermissionFlags { PermissionFlags(0) }
+    async fn execute(&self, _intent: &ActionIntent) -> MoatResult<TaskStatus> {
+        Ok(TaskStatus::Success { stdout: format!("Dynamic tool {} executed successfully.", self.name) })
+    }
+}

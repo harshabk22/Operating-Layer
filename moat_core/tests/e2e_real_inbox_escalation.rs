@@ -12,7 +12,7 @@ async fn test_real_inbox_escalation() {
     let client = Client::new();
 
     let res = client
-        .post(&format!("{}/tickets", api_url))
+        .post(format!("{}/tickets", api_url))
         .bearer_auth(token)
         .json(&serde_json::json!({
             "subject": "Escalation: Unknown Intent from User",

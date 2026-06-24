@@ -246,13 +246,17 @@ async fn execute_job_type(
     Ok(())
 }
 
-async fn execute_calendar_sync_job(
+pub async fn execute_calendar_sync_job(
     runtime: &CustomerInteractionRuntime,
     request_id: &str,
 ) -> anyhow::Result<()> {
     let conn = runtime.db.lock().await;
     let req = db::get_authorization_request(&conn, request_id)?
         .ok_or_else(|| anyhow::anyhow!("Authorization request {} not found", request_id))?;
+    if req.status != crate::business::models::AuthorizationStatus::Pending {
+        println!("[Job] Authorization request {} is not pending (status: {:?}). Skipping.", request_id, req.status);
+        return Ok(());
+    }
     let engagement = db::get_engagement(&conn, &req.engagement_id)?
         .ok_or_else(|| anyhow::anyhow!("Engagement {} not found", req.engagement_id))?;
     drop(conn);

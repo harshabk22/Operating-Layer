@@ -124,9 +124,14 @@ impl SessionStore {
     }
 
     fn db_path() -> Result<PathBuf> {
-        let home =
-            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-        Ok(home.join(".ageex").join("sessions.db"))
+        let cwd = std::env::current_dir()?;
+        let base_dir = if cwd.ends_with("moat_core") {
+            cwd
+        } else {
+            cwd.join("moat_core")
+        };
+        let path = base_dir.join("business.db");
+        Ok(path)
     }
 
     fn sessions_table(&self) -> String {

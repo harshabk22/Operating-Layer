@@ -12,7 +12,6 @@ pub mod state_machine;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::actors::{Actor, Role};
     use crate::assets::Money;
     use crate::commands::{Command, CommandEnvelope};

@@ -7,7 +7,7 @@ use crate::business::owner::OwnerService;
 use crate::business::runtime::CustomerInteractionRuntime;
 use axum::{
     middleware::from_fn,
-    response::Html,
+    response::IntoResponse,
     routing::{delete, get, patch, post},
     Router,
 };
@@ -21,8 +21,11 @@ pub struct ApiState {
     pub auth_store: Arc<AuthStore>,
 }
 
-async fn serve_dashboard() -> Html<&'static str> {
-    Html(include_str!("dashboard.html"))
+async fn serve_index() -> impl axum::response::IntoResponse {
+    match tokio::fs::read_to_string("../frontend/dist/index.html").await {
+        Ok(html) => axum::response::Html(html).into_response(),
+        Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 pub async fn start_api_server(
@@ -63,7 +66,6 @@ pub async fn start_api_server(
         // Escalations Endpoints
         .route("/escalations", get(list_escalations_handler))
         // Opportunity Pipeline Endpoints
-        .route("/opportunities", get(list_opportunities_handler))
         .route("/opportunities/:id", get(get_opportunity_handler))
         .route(
             "/opportunities/:id/stage",
@@ -121,45 +123,33 @@ pub async fn start_api_server(
         .route("/platform/packages/install", post(crate::api::routes::install_package_handler))
         .route("/platform/packages", get(crate::api::routes::list_packages_handler))
         .route("/platform/tenants", post(crate::api::routes::deploy_tenant_handler))
-        .route("/platform/tenants", get(crate::api::routes::list_tenants_handler))
         .route("/platform/tenants/:id", delete(crate::api::routes::delete_tenant_handler))
-        .route("/platform/tenants/:id/rollback", post(crate::api::routes::rollback_tenant_handler))
+        .route("/platform/packages/:id", delete(crate::api::routes::delete_package_handler))
         .route("/platform/packages/:id/upgrade", post(crate::api::routes::upgrade_package_handler))
         .route("/platform/packages/:id/rollback", post(crate::api::routes::rollback_package_handler))
-        .route("/platform/packages/:id", delete(crate::api::routes::delete_package_handler))
-        .route("/platform/tenants/:id/backup", post(crate::api::routes::backup_tenant_handler))
-        .route("/platform/tenants/:id/restore", post(crate::api::routes::restore_tenant_handler))
-        // sales
-        .route("/sales/leads", post(crate::api::routes::create_lead_handler))
-        .route("/sales/leads", get(crate::api::routes::list_leads_handler))
-        .route("/sales/leads/:id", delete(crate::api::routes::delete_lead_handler))
+
+        // sales package APIs
+        .route("/sales/leads", get(crate::api::routes::list_leads_handler).post(crate::api::routes::create_lead_handler))
         .route("/sales/leads/:id/qualify", post(crate::api::routes::qualify_lead_handler))
-        .route("/sales/opportunities", post(crate::api::routes::create_opportunity_handler))
-        .route("/sales/opportunities", get(crate::api::routes::list_opportunities_handler))
-        .route("/sales/opportunities/:id", delete(crate::api::routes::delete_opportunity_handler))
-        .route("/sales/opportunities/:id", patch(crate::api::routes::update_opportunity_handler))
-        // operations
-        .route("/operations/visits", post(crate::api::routes::schedule_visit_handler))
-        .route("/operations/visits", get(crate::api::routes::list_visits_handler))
-        .route("/operations/notifications", post(crate::api::routes::send_notification_handler))
-        .route("/operations/notifications", get(crate::api::routes::list_notifications_handler))
-        .route("/operations/templates", post(crate::api::routes::create_template_handler))
-        .route("/operations/templates", get(crate::api::routes::list_templates_handler))
-        .route("/operations/templates/:id", delete(crate::api::routes::delete_template_handler))
-        .route("/operations/approvals/:id/approve", post(crate::api::routes::approve_action_handler))
-        .route("/operations/approvals", get(crate::api::routes::list_approvals_handler))
-        // realestate
-        .route("/realestate/properties", post(crate::api::routes::create_property_handler))
-        .route("/realestate/properties", get(crate::api::routes::list_properties_handler))
+        .route("/sales/leads/:id", patch(crate::api::routes::update_lead_handler).delete(crate::api::routes::delete_lead_handler))
+        .route("/sales/opportunities", get(crate::api::routes::list_opportunities_handler).post(crate::api::routes::create_opportunity_handler))
+        .route("/sales/opportunities/:id", patch(crate::api::routes::update_opportunity_handler).delete(crate::api::routes::delete_opportunity_handler))
+
+        // real estate package APIs
+        .route("/realestate/properties", get(crate::api::routes::list_properties_handler).post(crate::api::routes::create_property_handler))
         .route("/realestate/properties/:id", delete(crate::api::routes::delete_property_handler))
-        .route("/realestate/offers", post(crate::api::routes::create_offer_handler))
-        .route("/realestate/offers", get(crate::api::routes::list_offers_handler))
-        .route("/realestate/offers/:id", delete(crate::api::routes::delete_offer_handler))
-        .route("/realestate/offers/:id", patch(crate::api::routes::update_offer_handler))
-        .route("/realestate/deals", post(crate::api::routes::close_deal_handler))
-        .route("/realestate/deals", get(crate::api::routes::list_deals_handler))
-        .route("/realestate/deals/:id", delete(crate::api::routes::delete_deal_handler))
-        .route("/realestate/deals/:id", patch(crate::api::routes::update_deal_handler))
+        .route("/realestate/offers", get(crate::api::routes::list_offers_handler).post(crate::api::routes::create_offer_handler))
+        .route("/realestate/offers/:id", patch(crate::api::routes::update_offer_handler).delete(crate::api::routes::delete_offer_handler))
+        .route("/realestate/deals", get(crate::api::routes::list_deals_handler).post(crate::api::routes::create_deal_handler))
+        .route("/realestate/deals/:id", patch(crate::api::routes::update_deal_handler).delete(crate::api::routes::delete_deal_handler))
+
+        // operations / notifications package APIs
+        .route("/operations/notifications", post(crate::api::routes::send_notification_handler).get(crate::api::routes::list_notifications_handler))
+        .route("/operations/templates", get(crate::api::routes::list_templates_handler).post(crate::api::routes::create_template_handler))
+        .route("/operations/templates/:id", delete(crate::api::routes::delete_template_handler))
+
+
+
         // system / dashboard / rbac
         .route("/system/rebuild_projections", post(crate::api::routes::rebuild_projections_handler))
         .route("/dashboard/kpis", get(crate::api::routes::get_dashboard_kpis_handler))
@@ -178,15 +168,24 @@ pub async fn start_api_server(
             require_auth(secured_sessions.clone(), req, next)
         }));
 
-    // General Router
-    let app = Router::new()
-        .route("/", get(serve_dashboard))
+    let api_routes = Router::new()
         .route("/login", post(login_handler))
         .route("/logout", post(logout_handler))
         .route("/oauth/callback", get(oauth_callback_handler))
         .merge(secured_router)
         .merge(auth_api_router)
-        .merge(owner_api_router)
+        .merge(owner_api_router);
+
+    // General Router
+    let app = Router::new()
+        .fallback_service(
+            tower_http::services::ServeDir::new("../frontend/dist").fallback(
+                tower_http::services::ServeFile::new("../frontend/dist/index.html"),
+            ),
+        )
+        .route("/login", get(serve_index))
+        .nest("/api", api_routes.clone())
+        .merge(api_routes)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;

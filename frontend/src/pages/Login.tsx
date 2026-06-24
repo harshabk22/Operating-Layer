@@ -5,18 +5,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 export default function Login() {
   const navigate = useNavigate();
-  const [role, setRole] = useState('owner');
+  const [username, setUsername] = useState('owner');
+  const [password, setPassword] = useState('admin');
   const [error, setError] = useState('');
 
-  const handleLogin = async () => {
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      const password = role === 'owner' ? 'owner' : 'operator';
       const response = await fetch('/api/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ username: role, password }),
+        body: JSON.stringify({ username, password }),
       });
 
       if (!response.ok) {
@@ -38,19 +39,35 @@ export default function Login() {
         <CardHeader>
           <CardTitle className="text-2xl font-bold text-center">MoatAgeex Platform</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground text-center">Select a role to login:</p>
-          <select 
-            value={role} 
-            onChange={(e) => setRole(e.target.value)}
-            className="w-full p-2 border rounded bg-background text-foreground"
-          >
-            <option value="owner">Owner</option>
-            <option value="operator">Operator</option>
-            <option value="viewer">Viewer</option>
-          </select>
-          {error && <p className="text-sm text-red-500 text-center">{error}</p>}
-          <Button className="w-full" onClick={handleLogin}>Enter Platform</Button>
+        <CardContent>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-1">
+              <label htmlFor="username" className="text-xs font-semibold text-muted-foreground uppercase">Username</label>
+              <input
+                id="username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full p-2 border rounded bg-background text-foreground text-sm"
+                placeholder="Enter username"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="password" className="text-xs font-semibold text-muted-foreground uppercase">Password</label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full p-2 border rounded bg-background text-foreground text-sm"
+                placeholder="Enter password"
+                required
+              />
+            </div>
+            {error && <p className="text-sm text-red-500 text-center">{error}</p>}
+            <Button type="submit" className="w-full">Enter Platform</Button>
+          </form>
         </CardContent>
       </Card>
     </div>

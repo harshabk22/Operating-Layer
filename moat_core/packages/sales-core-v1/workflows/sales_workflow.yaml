@@ -1,0 +1,6 @@
+name: sales_workflow
+steps:
+  - id: create_lead
+    action: sales_lead_creator
+  - id: qualify_lead
+    action: sales_lead_qualifier

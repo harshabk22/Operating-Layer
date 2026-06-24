@@ -1,0 +1,6 @@
+name: real_estate_workflow
+steps:
+  - id: check_inventory
+    action: property_tool
+  - id: negotiate_deal
+    action: deal_tool

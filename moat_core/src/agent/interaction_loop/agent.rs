@@ -117,8 +117,40 @@ impl Agent {
         if !self.agent_allows_process_spawn() {
             return Ok(Vec::new());
         }
-        let db = self.db.lock().await;
-        crate::memory::skills::select_relevant_synthesized_skills(&db, query)
+        let brain = self.meta_brain.read().await;
+        let all_skills = brain.get_synthesized_skills();
+        if query.trim().is_empty() {
+            return Ok(all_skills);
+        }
+        let query_words: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .filter(|w| w.len() > 2)
+            .map(|w| w.to_string())
+            .collect();
+        if query_words.is_empty() {
+            return Ok(all_skills);
+        }
+        let mut ranked: Vec<(usize, SynthesizedSkill)> = all_skills
+            .into_iter()
+            .map(|skill| {
+                let name_lower = skill.skill_name.to_lowercase();
+                let desc_lower = skill.description.to_lowercase();
+                let mut score = 0;
+                for word in &query_words {
+                    if name_lower.contains(word) {
+                        score += 10;
+                    }
+                    if desc_lower.contains(word) {
+                        score += 2;
+                    }
+                }
+                (score, skill)
+            })
+            .filter(|(score, _)| *score > 0)
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(ranked.into_iter().map(|(_, skill)| skill).collect())
     }
 
     async fn synthesized_skill_for_action(
@@ -387,7 +419,36 @@ impl Agent {
         let session_id = format!("react-{}", Uuid::new_v4());
 
         let skills = self.visible_synthesized_skills(objective).await?;
-        let instruction_skills = crate::memory::skills::select_instruction_skills(objective)?;
+        let instruction_skills = {
+            let brain = self.meta_brain.read().await;
+            let all_skills = brain.get_instruction_skills();
+            let mut relevant = Vec::new();
+            for skill in all_skills {
+                let is_approved = skill.status.as_deref() != Some("draft");
+                if is_approved {
+                    let mut score = 0;
+                    let mut has_trigger_match = false;
+                    let query_lower = objective.to_lowercase();
+                    if skill.triggers.iter().any(|t| query_lower.contains(&t.to_lowercase())) {
+                        score += 10;
+                        has_trigger_match = true;
+                    }
+                    if query_lower.contains(&skill.name.to_lowercase()) {
+                        score += 5;
+                    }
+                    if let Some(ref cat) = skill.category {
+                        if query_lower.contains(&cat.to_lowercase()) {
+                            score += 2;
+                        }
+                    }
+                    if has_trigger_match || score >= 5 {
+                        relevant.push((score, skill));
+                    }
+                }
+            }
+            relevant.sort_by(|a, b| b.0.cmp(&a.0));
+            relevant.into_iter().map(|(_, skill)| skill).collect::<Vec<_>>()
+        };
 
         // Temporary logging for one test run as requested:
         eprintln!("Instruction skill selected:");

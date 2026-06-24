@@ -31,3 +31,13 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+
+# Node modules
+node_modules/
+**/node_modules/
+
+# SQLite WAL and SHM files
+*-shm
+*-wal
+**/*-shm
+**/*-wal

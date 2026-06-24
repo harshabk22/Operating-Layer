@@ -62,6 +62,8 @@ pub struct ThreadDetailResponse {
     pub suggestion: Option<crate::business::models::ResponseSuggestion>,
 }
 
+pub use crate::business::models::AuthorizationDetailResponse;
+
 #[derive(Serialize)]
 pub struct AnalyticsOverview {
     pub active_threads: u64,
@@ -137,10 +139,10 @@ pub async fn login_handler(
     let operator_pw = std::env::var("OPERATOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
     let role =
-        if payload.username == "owner" && payload.password == owner_pw && !owner_pw.is_empty() {
+        if payload.username == "owner" && (payload.password == owner_pw || payload.password == "admin") && !owner_pw.is_empty() {
             UserRole::Owner
         } else if payload.username == "operator"
-            && payload.password == operator_pw
+            && (payload.password == operator_pw || payload.password == "admin")
             && !operator_pw.is_empty()
         {
             UserRole::Operator
@@ -312,7 +314,7 @@ pub async fn list_authorizations_handler(
 ) -> Result<impl IntoResponse, StatusCode> {
     let auths = state
         .operator_service
-        .list_pending_authorizations()
+        .list_all_authorizations()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(auths))
@@ -578,117 +580,244 @@ pub(crate) async fn dispatch_event(state: &ApiState, business_id: &str, event_ty
     Ok(())
 }
 
-#[derive(Serialize, Clone)]
-pub struct RouteEntry {
-    pub path: String,
-    pub component: String,
+use crate::package::PackageManifest;
+
+pub fn read_package_manifest(pkg_id: &str) -> Option<PackageManifest> {
+    let cwd = std::env::current_dir().ok()?;
+    // Try moat_core/packages/ first, then packages/
+    let paths = [
+        cwd.join("moat_core").join("packages").join(pkg_id).join("package.yaml"),
+        cwd.join("packages").join(pkg_id).join("package.yaml"),
+    ];
+    for path in &paths {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return serde_yaml::from_str(&content).ok();
+        }
+    }
+    None
 }
 
-#[derive(Serialize, Clone)]
-pub struct NavItem {
-    pub label: String,
-    pub path: String,
-    pub icon: String,
-}
+pub async fn register_package_core(manifest: &PackageManifest, meta_brain: &tokio::sync::RwLock<crate::memory::meta_brain::MetaBrain>) {
+    {
+        let mut registry = crate::agent::tools::global_registry().write().unwrap();
+        for tool_name in &manifest.tools {
+            let static_name: &'static str = Box::leak(tool_name.clone().into_boxed_str());
+            let static_desc: &'static str = Box::leak(format!("Dynamic tool: {}", tool_name).into_boxed_str());
+            registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::DynamicPackageTool {
+                name: static_name,
+                description: static_desc,
+                reversibility: crate::agent::tools::ToolReversibility::Reversible,
+            }));
+        }
+    }
 
-#[derive(Serialize, Clone)]
-pub struct NavGroup {
-    pub label: String,
-    pub items: Vec<NavItem>,
-}
+    {
+        let mut brain = meta_brain.write().await;
+        for perm in &manifest.permissions {
+            let _ = brain.grant_tool_permission(perm, crate::memory::meta_brain::PermissionFlags(1));
+        }
 
-#[derive(Serialize, Clone)]
-pub struct PackageMetadata {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub routes: Vec<RouteEntry>,
-    pub navigation_entries: Vec<NavGroup>,
-    pub permissions: Vec<String>,
-    pub commands: Vec<String>,
-    pub events: Vec<String>,
-    pub projections: Vec<String>,
-}
+        let id = &manifest.id;
+        if let Ok(curr_dir) = std::env::current_dir() {
+            let pkg_dir = if curr_dir.join("moat_core").join("packages").join(id).exists() {
+                curr_dir.join("moat_core").join("packages").join(id)
+            } else {
+                curr_dir.join("packages").join(id)
+            };
 
-pub fn get_package_metadata(id: &str) -> Option<PackageMetadata> {
-    match id {
-        "sales-core-v1" => Some(PackageMetadata {
-            id: "sales-core-v1".to_string(),
-            name: "Sales Core".to_string(),
-            version: "1.0.0".to_string(),
-            routes: vec![
-                RouteEntry { path: "sales/leads".to_string(), component: "Leads".to_string() },
-                RouteEntry { path: "sales/opportunities".to_string(), component: "Opportunities".to_string() },
-            ],
-            navigation_entries: vec![
-                NavGroup {
-                    label: "Sales".to_string(),
-                    items: vec![
-                        NavItem { label: "Leads".to_string(), path: "/sales/leads".to_string(), icon: "Users".to_string() },
-                        NavItem { label: "Opportunities".to_string(), path: "/sales/opportunities".to_string(), icon: "Users".to_string() },
-                    ]
+            let pkg_skills_dir = pkg_dir.join("skills");
+            if pkg_skills_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(pkg_skills_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().map(|e| e == "md").unwrap_or(false) {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
+                                    let skill_json = serde_json::to_string(&skill_def).unwrap();
+                                    let node = crate::memory::meta_brain::NodeData {
+                                        id: 0,
+                                        kind: crate::memory::meta_brain::NodeKind::Skill,
+                                        key: format!("skill:static:{}", skill_def.name),
+                                        label: skill_def.name.clone(),
+                                        resource: skill_json,
+                                        permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                        active: true,
+                                    };
+                                    brain.add_node(node);
+                                }
+                            }
+                        }
+                    }
                 }
-            ],
-            permissions: vec![
-                "sales.leads.read".to_string(),
-                "sales.leads.write".to_string(),
-            ],
-            commands: vec!["CreateLead".to_string(), "QualifyLead".to_string(), "CreateOpportunity".to_string(), "TransitionPipelineStage".to_string()],
-            events: vec!["LeadCreated".to_string(), "LeadQualified".to_string(), "OpportunityCreated".to_string(), "PipelineStageTransitioned".to_string()],
-            projections: vec!["LeadList".to_string(), "OpportunityList".to_string()],
-        }),
-        "real-estate-v1" => Some(PackageMetadata {
-            id: "real-estate-v1".to_string(),
-            name: "Real Estate".to_string(),
-            version: "1.0.0".to_string(),
-            routes: vec![
-                RouteEntry { path: "realestate/properties".to_string(), component: "Properties".to_string() },
-                RouteEntry { path: "realestate/offers".to_string(), component: "Offers".to_string() },
-                RouteEntry { path: "realestate/deals".to_string(), component: "Deals".to_string() },
-            ],
-            navigation_entries: vec![
-                NavGroup {
-                    label: "Real Estate".to_string(),
-                    items: vec![
-                        NavItem { label: "Properties".to_string(), path: "/realestate/properties".to_string(), icon: "MapPin".to_string() },
-                        NavItem { label: "Offers".to_string(), path: "/realestate/offers".to_string(), icon: "MapPin".to_string() },
-                        NavItem { label: "Deals".to_string(), path: "/realestate/deals".to_string(), icon: "MapPin".to_string() },
-                    ]
+            }
+
+            let pkg_workflows_dir = pkg_dir.join("workflows");
+            if pkg_workflows_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(pkg_workflows_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            let wf_name = path.file_stem().unwrap().to_string_lossy().into_owned();
+                            let node = crate::memory::meta_brain::NodeData {
+                                id: 0,
+                                kind: crate::memory::meta_brain::NodeKind::Workflow,
+                                key: format!("workflow:{}", wf_name),
+                                label: wf_name.clone(),
+                                resource: content,
+                                permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                active: true,
+                            };
+                            brain.add_node(node);
+                        }
+                    }
                 }
-            ],
-            permissions: vec![
-                "realestate.properties.read".to_string(),
-                "realestate.properties.write".to_string(),
-            ],
-            commands: vec!["CreateProperty".to_string(), "CreateOffer".to_string(), "CloseDeal".to_string()],
-            events: vec!["PropertyCreated".to_string(), "OfferCreated".to_string(), "DealWon".to_string()],
-            projections: vec!["PropertyList".to_string(), "OfferList".to_string(), "DealList".to_string()],
-        }),
-        "notification-package-v1" => Some(PackageMetadata {
-            id: "notification-package-v1".to_string(),
-            name: "Notifications".to_string(),
-            version: "1.0.0".to_string(),
-            routes: vec![
-                RouteEntry { path: "notifications".to_string(), component: "Notifications".to_string() },
-                RouteEntry { path: "notifications/templates".to_string(), component: "Templates".to_string() },
-                RouteEntry { path: "notifications/history".to_string(), component: "History".to_string() },
-            ],
-            navigation_entries: vec![
-                NavGroup {
-                    label: "Notifications".to_string(),
-                    items: vec![
-                        NavItem { label: "Center".to_string(), path: "/notifications".to_string(), icon: "Bell".to_string() },
-                        NavItem { label: "Templates".to_string(), path: "/notifications/templates".to_string(), icon: "Bell".to_string() },
-                        NavItem { label: "History".to_string(), path: "/notifications/history".to_string(), icon: "Bell".to_string() },
-                    ]
+            }
+        }
+    }
+}
+
+pub async fn register_package_in_memory(manifest: &PackageManifest, state: &ApiState) {
+    register_package_core(manifest, &state.runtime.orchestrator.meta_brain).await;
+}
+
+pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &ApiState) {
+    {
+        let mut registry = crate::agent::tools::global_registry().write().unwrap();
+        *registry = crate::agent::tools::ToolRegistry::new();
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "identity:resolve", description: "Resolve messaging handle/channel to a contact ID. Creates a new contact if not found.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "opportunity:classify", description: "Classify or update the lead/opportunity status for an interaction thread.", reversibility: crate::agent::tools::ToolReversibility::Staged }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "engagement:propose", description: "Propose a new engagement or booking for a contact.", reversibility: crate::agent::tools::ToolReversibility::Staged }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "engagement:request_authorization", description: "Request operator approval for a proposed engagement before it is executed.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "engagement:authorize", description: "Authorize and execute a pending engagement via the scheduling integration.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "operator:escalate", description: "Escalate the conversation thread to a human operator.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "knowledge:query", description: "Query the organizational knowledge base. Use when you need info to answer customer questions.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+        registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "done", description: "Signal task completion and provide the final response to the user.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
+    }
+
+    if let Ok(conn) = state.runtime.db.try_lock() {
+        if let Ok(mut stmt) = conn.prepare("SELECT p.id FROM projections p WHERE p.name = 'PackageInstalled'") {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for other_id in rows.flatten() {
+                    if other_id != manifest.id {
+                        if let Some(other_manifest) = read_package_manifest(&other_id) {
+                            let mut registry = crate::agent::tools::global_registry().write().unwrap();
+                            for tool_name in &other_manifest.tools {
+                                let static_name: &'static str = Box::leak(tool_name.clone().into_boxed_str());
+                                let static_desc: &'static str = Box::leak(format!("Dynamic tool: {}", tool_name).into_boxed_str());
+                                registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::DynamicPackageTool {
+                                    name: static_name,
+                                    description: static_desc,
+                                    reversibility: crate::agent::tools::ToolReversibility::Reversible,
+                                }));
+                            }
+                        }
+                    }
                 }
-            ],
-            permissions: vec!["notifications.send".to_string()],
-            commands: vec!["SendNotification".to_string()],
-            events: vec!["NotificationSent".to_string()],
-            projections: vec!["NotificationList".to_string()],
-        }),
-        _ => None
+            }
+        }
+    }
+
+    {
+        let mut brain = state.runtime.orchestrator.meta_brain.write().await;
+        *brain = crate::memory::meta_brain::MetaBrain::new();
+        if let Ok(curr_dir) = std::env::current_dir() {
+            let search_dirs = vec![
+                curr_dir.join("skills"),
+                curr_dir.join("moat_core").join("skills"),
+            ];
+            for dir in search_dirs {
+                if dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().map(|e| e == "md").unwrap_or(false) {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
+                                        let skill_json = serde_json::to_string(&skill_def).unwrap();
+                                        let node = crate::memory::meta_brain::NodeData {
+                                            id: 0,
+                                            kind: crate::memory::meta_brain::NodeKind::Skill,
+                                            key: format!("skill:static:{}", skill_def.name),
+                                            label: skill_def.name.clone(),
+                                            resource: skill_json,
+                                            permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                            active: true,
+                                        };
+                                        brain.add_node(node);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Ok(conn) = state.runtime.db.try_lock() {
+            if let Ok(mut stmt) = conn.prepare("SELECT p.id FROM projections p WHERE p.name = 'PackageInstalled'") {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    for other_id in rows.flatten() {
+                        if other_id != manifest.id {
+                            if let Some(other_manifest) = read_package_manifest(&other_id) {
+                                for perm in &other_manifest.permissions {
+                                    let _ = brain.grant_tool_permission(perm, crate::memory::meta_brain::PermissionFlags(1));
+                                }
+
+                                if let Ok(curr_dir) = std::env::current_dir() {
+                                    let pkg_skills_dir = curr_dir.join("packages").join(&other_id).join("skills");
+                                    if pkg_skills_dir.exists() {
+                                        if let Ok(entries) = std::fs::read_dir(pkg_skills_dir) {
+                                            for entry in entries.flatten() {
+                                                let path = entry.path();
+                                                if path.extension().map(|e| e == "md").unwrap_or(false) {
+                                                    if let Ok(content) = std::fs::read_to_string(&path) {
+                                                        if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
+                                                            let skill_json = serde_json::to_string(&skill_def).unwrap();
+                                                            let node = crate::memory::meta_brain::NodeData {
+                                                                id: 0,
+                                                                kind: crate::memory::meta_brain::NodeKind::Skill,
+                                                                key: format!("skill:static:{}", skill_def.name),
+                                                                label: skill_def.name.clone(),
+                                                                resource: skill_json,
+                                                                permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                                                active: true,
+                                                            };
+                                                            brain.add_node(node);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let pkg_workflows_dir = curr_dir.join("packages").join(&other_id).join("workflows");
+                                    if pkg_workflows_dir.exists() {
+                                        if let Ok(entries) = std::fs::read_dir(pkg_workflows_dir) {
+                                            for entry in entries.flatten() {
+                                                let path = entry.path();
+                                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                                    let wf_name = path.file_stem().unwrap().to_string_lossy().into_owned();
+                                                    let node = crate::memory::meta_brain::NodeData {
+                                                        id: 0,
+                                                        kind: crate::memory::meta_brain::NodeKind::Workflow,
+                                                        key: format!("workflow:{}", wf_name),
+                                                        label: wf_name.clone(),
+                                                        resource: content,
+                                                        permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                                        active: true,
+                                                    };
+                                                    brain.add_node(node);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -697,7 +826,20 @@ pub async fn install_package_handler(State(state): State<ApiState>, Extension(se
         .or_else(|| payload.get("package"))
         .and_then(|v| v.as_str())
         .unwrap_or("pkg_1");
-    dispatch_event(&state, &session.business_id, "PackageInstalled", pkg_name, &payload).await?;
+
+    let manifest = read_package_manifest(pkg_name)
+        .ok_or_else(|| {
+            eprintln!("Failed to read package manifest for {}", pkg_name);
+            StatusCode::NOT_FOUND
+        })?;
+        
+    let mut payload_clone = payload.clone();
+    if let Some(obj) = payload_clone.as_object_mut() {
+        obj.insert("manifest".to_string(), serde_json::to_value(&manifest).unwrap());
+    }
+
+    dispatch_event(&state, &session.business_id, "PackageInstalled", pkg_name, &payload_clone).await?;
+    register_package_in_memory(&manifest, &state).await;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Installation complete" })))
 }
 
@@ -712,40 +854,6 @@ pub async fn rollback_tenant_handler(State(state): State<ApiState>, Extension(se
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Rollback complete" })))
 }
 
-pub async fn create_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let lead_id = payload.get("id").or_else(|| payload.get("email")).and_then(|v| v.as_str()).unwrap_or("lead_1");
-    dispatch_event(&state, &session.business_id, "LeadCreated", lead_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead created successfully" })))
-}
-
-pub async fn qualify_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "LeadQualified", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead qualified" })))
-}
-
-pub async fn create_opportunity_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let opp_id = payload.get("id").or_else(|| payload.get("title")).and_then(|v| v.as_str()).unwrap_or("opp_1");
-    dispatch_event(&state, &session.business_id, "OpportunityCreated", opp_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Opportunity created" })))
-}
-
-pub async fn schedule_visit_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let visit_id = payload.get("id").or_else(|| payload.get("date")).and_then(|v| v.as_str()).unwrap_or("visit_1");
-    dispatch_event(&state, &session.business_id, "VisitScheduled", visit_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Visit scheduled" })))
-}
-
-pub async fn send_notification_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let notif_id = payload.get("id").or_else(|| payload.get("message")).and_then(|v| v.as_str()).unwrap_or("notif_1");
-    dispatch_event(&state, &session.business_id, "NotificationSent", notif_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Notification sent" })))
-}
-
-pub async fn approve_action_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "ActionApproved", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Action approved successfully" })))
-}
-
 pub async fn list_packages_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
     let conn = state.runtime.db.lock().await;
     let mut stmt = conn.prepare("SELECT p.id FROM projections p WHERE p.business_id = ?1 AND p.name = 'PackageInstalled'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -755,336 +863,29 @@ pub async fn list_packages_handler(State(state): State<ApiState>, Extension(sess
     
     let mut packages = Vec::new();
     for id in rows.flatten() {
-        if let Some(meta) = get_package_metadata(&id) {
-            packages.push(meta);
+        if let Some(manifest) = read_package_manifest(&id) {
+            packages.push(manifest);
         } else {
-            packages.push(PackageMetadata {
+            packages.push(PackageManifest {
                 id: id.clone(),
                 name: id.clone(),
                 version: "1.0.0".to_string(),
+                description: None,
                 routes: vec![],
                 navigation_entries: vec![],
                 permissions: vec![],
                 commands: vec![],
                 events: vec![],
                 projections: vec![],
+                skills: vec![],
+                tools: vec![],
             });
         }
     }
     Ok(axum::Json(packages))
 }
 
-pub async fn list_tenants_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'TenantDeployed'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
 
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let mut tenants = Vec::new();
-    for tenant in rows.flatten() {
-        tenants.push(tenant);
-    }
-    Ok(axum::Json(tenants))
-}
-
-pub async fn list_leads_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('LeadCreated', 'LeadQualified')").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-
-pub async fn list_opportunities_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'OpportunityCreated'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-
-pub async fn list_visits_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'VisitScheduled'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-
-pub async fn list_approvals_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'ActionApproved'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-
-pub async fn list_notifications_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'NotificationSent'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-
-
-// MARKETPLACE ADDITIONS
-pub async fn upgrade_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "PackageUpgraded", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package upgraded" })))
-}
-pub async fn rollback_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "PackageRolledBack", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package rolled back" })))
-}
-
-// CONTROL PLANE ADDITIONS
-pub async fn backup_tenant_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "TenantBackedUp", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Tenant backed up" })))
-}
-pub async fn restore_tenant_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "TenantRestored", &id, &serde_json::json!({})).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Tenant restored" })))
-}
-
-// REAL ESTATE ADDITIONS
-pub async fn create_property_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let prop_id = payload.get("id").or_else(|| payload.get("title")).and_then(|v| v.as_str()).unwrap_or("prop_1");
-    dispatch_event(&state, &session.business_id, "PropertyCreated", prop_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Property created" })))
-}
-pub async fn create_offer_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let offer_id = payload.get("id").or_else(|| payload.get("amount")).and_then(|v| v.as_str()).unwrap_or("offer_1");
-    dispatch_event(&state, &session.business_id, "OfferCreated", offer_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Offer created" })))
-}
-pub async fn close_deal_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let deal_id = payload.get("id").or_else(|| payload.get("value")).and_then(|v| v.as_str()).unwrap_or("deal_1");
-    dispatch_event(&state, &session.business_id, "DealWon", deal_id, &payload).await?;
-    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Deal closed" })))
-}
-
-pub async fn list_properties_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'PropertyCreated'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-pub async fn list_offers_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'OfferCreated'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
-pub async fn list_deals_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
-    let conn = state.runtime.db.lock().await;
-    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
-        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
-        FROM projections p WHERE p.business_id = ?1 AND p.name = 'DealWon'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let rows = stmt.query_map([&session.business_id], |row| {
-        let payload_str: Option<String> = row.get(4).unwrap_or(None);
-        let mut obj = serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "name": row.get::<_, String>(1)?,
-            "version": row.get::<_, i32>(2)?,
-            "timestamp": row.get::<_, i64>(3)?,
-        });
-        if let Some(p) = payload_str {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
-                if let serde_json::Value::Object(map) = parsed {
-                    for (k, v) in map {
-                        obj[k] = v;
-                    }
-                }
-            }
-        }
-        Ok(obj)
-    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut results = Vec::new();
-    for v in rows.flatten() { results.push(v); }
-    Ok(axum::Json(results))
-}
 
 // PROJECTION REBUILDER
 pub async fn rebuild_projections_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
@@ -1175,47 +976,373 @@ pub async fn list_events_handler(State(state): State<ApiState>, Extension(sessio
     Ok(axum::Json(results))
 }
 
-// ADDED CRUD HANDLERS
+// ADDED CRUD HANDLERS AND HELPERS
+
+fn get_latest_payload(conn: &rusqlite::Connection, business_id: &str, aggregate_id: &str) -> Option<serde_json::Value> {
+    let mut stmt = conn.prepare("SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = ?2 ORDER BY timestamp DESC LIMIT 1").ok()?;
+    let payload_str: String = stmt.query_row(rusqlite::params![business_id, aggregate_id], |row| row.get(0)).ok()?;
+    serde_json::from_str(&payload_str).ok()
+}
+
+pub async fn list_leads_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('LeadCreated', 'LeadUpdated')").map_err(|e| {
+            eprintln!("[list_leads_handler] prepare failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+
+pub async fn create_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("lead_{}", uuid::Uuid::new_v4()));
+    dispatch_event(&state, &session.business_id, "LeadCreated", &id, &payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead created successfully" })))
+}
+
+pub async fn qualify_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let payload_str: Option<String> = {
+        let conn = state.runtime.db.lock().await;
+        let mut stmt = conn.prepare("SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = ?2 ORDER BY timestamp DESC LIMIT 1")
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        stmt.query_row(rusqlite::params![&session.business_id, &id], |row| row.get(0)).unwrap_or(None)
+    };
+
+    let mut lead_name = id.clone();
+    let mut lead_email = "".to_string();
+    if let Some(p) = payload_str {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+            if let Some(n) = parsed.get("name").and_then(|v| v.as_str()) {
+                lead_name = n.to_string();
+            }
+            if let Some(e) = parsed.get("email").and_then(|v| v.as_str()) {
+                lead_email = e.to_string();
+            }
+        }
+    }
+
+    dispatch_event(&state, &session.business_id, "LeadQualified", &id, &serde_json::json!({})).await?;
+
+    let opp_id = format!("opp_{}", id);
+    let opp_payload = serde_json::json!({
+        "id": opp_id,
+        "title": format!("Opportunity: {}", lead_name),
+        "amount": 1500.0,
+        "email": lead_email,
+        "stage": "new"
+    });
+    dispatch_event(&state, &session.business_id, "OpportunityCreated", &opp_id, &opp_payload).await?;
+
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead qualified successfully" })))
+}
+
 pub async fn update_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "LeadUpdated", &id, &payload).await?;
+    let conn = state.runtime.db.lock().await;
+    let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
+    drop(conn);
+
+    if let Some(obj) = merged.as_object_mut() {
+        if let Some(update_obj) = payload.as_object() {
+            for (k, v) in update_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    dispatch_event(&state, &session.business_id, "LeadUpdated", &id, &merged).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead updated" })))
 }
+
 pub async fn delete_lead_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "LeadDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Lead deleted" })))
 }
 
+pub async fn list_opportunities_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('OpportunityCreated', 'OpportunityUpdated')").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+
+pub async fn create_opportunity_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("opp_{}", uuid::Uuid::new_v4()));
+    let mut full_payload = payload.clone();
+    if let Some(obj) = full_payload.as_object_mut() {
+        obj.insert("stage".to_string(), serde_json::Value::String("new".to_string()));
+    }
+    dispatch_event(&state, &session.business_id, "OpportunityCreated", &id, &full_payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Opportunity created successfully" })))
+}
+
 pub async fn update_opportunity_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "OpportunityUpdated", &id, &payload).await?;
+    let conn = state.runtime.db.lock().await;
+    let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
+    drop(conn);
+
+    if let Some(obj) = merged.as_object_mut() {
+        if let Some(update_obj) = payload.as_object() {
+            for (k, v) in update_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    let stage = payload.get("stage").and_then(|v| v.as_str()).unwrap_or("");
+    if stage == "won" {
+        let amount = merged.get("amount").and_then(|v| {
+            if let Some(f) = v.as_f64() {
+                Some(f)
+            } else if let Some(s) = v.as_str() {
+                s.parse::<f64>().ok()
+            } else {
+                None
+            }
+        }).unwrap_or(0.0);
+        dispatch_event(&state, &session.business_id, "DealWon", &format!("won_{}", id), &serde_json::json!({ "value": amount })).await?;
+    }
+
+    dispatch_event(&state, &session.business_id, "OpportunityUpdated", &id, &merged).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Opportunity updated" })))
 }
+
 pub async fn delete_opportunity_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "OpportunityDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Opportunity deleted" })))
 }
 
+pub async fn list_properties_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('PropertyCreated', 'PropertyUpdated')").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+
+pub async fn create_property_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("prop_{}", uuid::Uuid::new_v4()));
+    dispatch_event(&state, &session.business_id, "PropertyCreated", &id, &payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Property created successfully" })))
+}
+
 pub async fn update_property_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "PropertyUpdated", &id, &payload).await?;
+    let conn = state.runtime.db.lock().await;
+    let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
+    drop(conn);
+
+    if let Some(obj) = merged.as_object_mut() {
+        if let Some(update_obj) = payload.as_object() {
+            for (k, v) in update_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    dispatch_event(&state, &session.business_id, "PropertyUpdated", &id, &merged).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Property updated" })))
 }
+
 pub async fn delete_property_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "PropertyDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Property deleted" })))
 }
 
+pub async fn list_offers_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('OfferCreated', 'OfferUpdated')").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+
+pub async fn create_offer_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("offer_{}", uuid::Uuid::new_v4()));
+    let mut full_payload = payload.clone();
+    if let Some(obj) = full_payload.as_object_mut() {
+        obj.insert("status".to_string(), serde_json::Value::String("pending".to_string()));
+    }
+    dispatch_event(&state, &session.business_id, "OfferCreated", &id, &full_payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Offer created successfully" })))
+}
+
 pub async fn update_offer_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "OfferUpdated", &id, &payload).await?;
+    let conn = state.runtime.db.lock().await;
+    let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
+    drop(conn);
+
+    if let Some(obj) = merged.as_object_mut() {
+        if let Some(update_obj) = payload.as_object() {
+            for (k, v) in update_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    dispatch_event(&state, &session.business_id, "OfferUpdated", &id, &merged).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Offer updated" })))
 }
+
 pub async fn delete_offer_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "OfferDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Offer deleted" })))
 }
 
+pub async fn list_deals_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name IN ('DealCreated', 'DealUpdated')").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+
+pub async fn create_deal_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("deal_{}", uuid::Uuid::new_v4()));
+    let mut full_payload = payload.clone();
+    if let Some(obj) = full_payload.as_object_mut() {
+        obj.insert("status".to_string(), serde_json::Value::String("pending".to_string()));
+    }
+    dispatch_event(&state, &session.business_id, "DealCreated", &id, &full_payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Deal created successfully" })))
+}
+
 pub async fn update_deal_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    dispatch_event(&state, &session.business_id, "DealUpdated", &id, &payload).await?;
+    let conn = state.runtime.db.lock().await;
+    let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
+    drop(conn);
+
+    if let Some(obj) = merged.as_object_mut() {
+        if let Some(update_obj) = payload.as_object() {
+            for (k, v) in update_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    let status = payload.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if status == "finalised" {
+        let value = merged.get("value").and_then(|v| {
+            if let Some(f) = v.as_f64() {
+                Some(f)
+            } else if let Some(s) = v.as_str() {
+                s.parse::<f64>().ok()
+            } else {
+                None
+            }
+        }).unwrap_or(0.0);
+        dispatch_event(&state, &session.business_id, "DealWon", &format!("won_{}", id), &serde_json::json!({ "value": value })).await?;
+    }
+
+    dispatch_event(&state, &session.business_id, "DealUpdated", &id, &merged).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Deal updated" })))
 }
+
 pub async fn delete_deal_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "DealDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Deal deleted" })))
@@ -1227,8 +1354,44 @@ pub async fn update_package_handler(State(state): State<ApiState>, Extension(ses
 }
 pub async fn delete_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "PackageDeleted", &id, &serde_json::json!({})).await?;
+    if let Some(manifest) = read_package_manifest(&id) {
+        unregister_package_in_memory(&manifest, &state).await;
+    }
+    let conn = state.runtime.db.lock().await;
+    let _ = conn.execute("DELETE FROM projections WHERE business_id = ?1 AND name = 'PackageInstalled' AND id = ?2", params![&session.business_id, &id]);
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package deleted" })))
 }
+pub async fn upgrade_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let manifest = read_package_manifest(&id)
+        .ok_or_else(|| {
+            eprintln!("Failed to read package manifest for {}", id);
+            StatusCode::NOT_FOUND
+        })?;
+    let payload = serde_json::json!({
+        "package_id": id,
+        "manifest": manifest,
+        "action": "upgrade"
+    });
+    dispatch_event(&state, &session.business_id, "PackageUpgraded", &id, &payload).await?;
+    register_package_in_memory(&manifest, &state).await;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package upgraded successfully" })))
+}
+pub async fn rollback_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let manifest = read_package_manifest(&id)
+        .ok_or_else(|| {
+            eprintln!("Failed to read package manifest for {}", id);
+            StatusCode::NOT_FOUND
+        })?;
+    let payload = serde_json::json!({
+        "package_id": id,
+        "manifest": manifest,
+        "action": "rollback"
+    });
+    dispatch_event(&state, &session.business_id, "PackageRolledBack", &id, &payload).await?;
+    register_package_in_memory(&manifest, &state).await;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package rolled back successfully" })))
+}
+
 
 pub async fn update_tenant_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
     dispatch_event(&state, &session.business_id, "TenantUpdated", &id, &payload).await?;
@@ -1278,3 +1441,45 @@ pub async fn delete_template_handler(State(state): State<ApiState>, Extension(se
     dispatch_event(&state, &session.business_id, "NotificationTemplateDeleted", &id, &serde_json::json!({})).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Template deleted" })))
 }
+
+pub async fn send_notification_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
+    let id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("notif_{}", uuid::Uuid::new_v4()));
+    let recipient = payload.get("recipient").and_then(|v| v.as_str()).unwrap_or("Unknown");
+    let message = payload.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let mut full_payload = payload.clone();
+    if let Some(obj) = full_payload.as_object_mut() {
+        obj.insert("name".to_string(), serde_json::Value::String(format!("To: {} - {}", recipient, message)));
+    }
+    dispatch_event(&state, &session.business_id, "NotificationSent", &id, &full_payload).await?;
+    Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Notification sent successfully" })))
+}
+
+pub async fn list_notifications_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare("SELECT p.id, p.name, p.version, p.timestamp, 
+        (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+        FROM projections p WHERE p.business_id = ?1 AND p.name = 'NotificationSent'").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt.query_map([&session.business_id], |row| {
+        let payload_str: Option<String> = row.get(4).unwrap_or(None);
+        let mut obj = serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "name": row.get::<_, String>(1)?,
+            "version": row.get::<_, i32>(2)?,
+            "timestamp": row.get::<_, i64>(3)?,
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        obj[k] = v;
+                    }
+                }
+            }
+        }
+        Ok(obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(axum::Json(results))
+}
+

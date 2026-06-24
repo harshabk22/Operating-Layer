@@ -331,14 +331,44 @@ impl GoogleSheetsProvider {
 
 impl SpreadsheetProvider for GoogleSheetsProvider {
     fn append_row(&self, sheet_name: &str, values: Vec<String>) -> Result<()> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google_sheets")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist {
+            println!("[GoogleSheetsProvider] No credentials found for business {}. Falling back to sandbox append_row.", self.business_id);
+            return Ok(());
+        }
         self.run_async(self.append_row_async(sheet_name, values))
     }
 
     fn update_row(&self, sheet_name: &str, row_index: usize, values: Vec<String>) -> Result<()> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google_sheets")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist {
+            println!("[GoogleSheetsProvider] No credentials found for business {}. Falling back to sandbox update_row.", self.business_id);
+            return Ok(());
+        }
         self.run_async(self.update_row_async(sheet_name, row_index, values))
     }
 
     fn lookup_row(&self, sheet_name: &str, query: &str) -> Result<Option<(usize, Vec<String>)>> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google_sheets")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist {
+            println!("[GoogleSheetsProvider] No credentials found for business {}. Falling back to sandbox lookup_row.", self.business_id);
+            return Ok(None);
+        }
         self.run_async(self.lookup_row_async(sheet_name, query))
     }
 }

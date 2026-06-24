@@ -373,10 +373,35 @@ impl GoogleCalendarProvider {
 
 impl CalendarProvider for GoogleCalendarProvider {
     fn check_availability(&self, start_time: i64, end_time: i64) -> Result<bool> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist {
+            println!("[GoogleCalendarProvider] No credentials found for business {}. Falling back to sandbox check_availability.", self.business_id);
+            return Ok(true);
+        }
         self.run_async(async move { self.check_availability_async(start_time, end_time).await })
     }
 
     fn create_event(&self, title: &str, start_time: i64, end_time: i64) -> Result<CalendarEvent> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist {
+            println!("[GoogleCalendarProvider] No credentials found for business {}. Falling back to sandbox create_event.", self.business_id);
+            return Ok(CalendarEvent {
+                id: format!("sandbox-{}", uuid::Uuid::new_v4()),
+                title: title.to_string(),
+                start_time,
+                end_time,
+            });
+        }
         self.run_async(async move {
             self.create_event_async(title.to_string(), start_time, end_time)
                 .await
@@ -390,6 +415,21 @@ impl CalendarProvider for GoogleCalendarProvider {
         start_time: i64,
         end_time: i64,
     ) -> Result<CalendarEvent> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist || event_id.starts_with("sandbox-") {
+            println!("[GoogleCalendarProvider] No credentials or sandbox event. Falling back to sandbox update_event.");
+            return Ok(CalendarEvent {
+                id: event_id.to_string(),
+                title: title.to_string(),
+                start_time,
+                end_time,
+            });
+        }
         self.run_async(async move {
             self.update_event_async(
                 event_id.to_string(),
@@ -402,6 +442,16 @@ impl CalendarProvider for GoogleCalendarProvider {
     }
 
     fn cancel_event(&self, event_id: &str) -> Result<()> {
+        let creds_exist = {
+            let conn = self.db.lock().unwrap();
+            crate::business::db::load_calendar_credentials(&conn, &self.business_id, "google")
+                .map(|c| c.is_some())
+                .unwrap_or(false)
+        };
+        if !creds_exist || event_id.starts_with("sandbox-") {
+            println!("[GoogleCalendarProvider] No credentials or sandbox event. Falling back to sandbox cancel_event.");
+            return Ok(());
+        }
         self.run_async(async move { self.cancel_event_async(event_id.to_string()).await })
     }
 }

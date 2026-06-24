@@ -1,0 +1,41 @@
+id: real-estate-v1
+name: real-estate
+version: 1.0.0
+description: Real Estate property, offer, and deal management package
+routes:
+  - path: /realestate/properties
+    component: Properties
+  - path: /realestate/offers
+    component: Offers
+  - path: /realestate/deals
+    component: Deals
+navigation_entries:
+  - label: Real Estate
+    items:
+      - label: Properties
+        path: /realestate/properties
+        icon: Home
+      - label: Offers
+        path: /realestate/offers
+        icon: DollarSign
+      - label: Deals
+        path: /realestate/deals
+        icon: Briefcase
+permissions:
+  - realestate:properties:read
+  - realestate:properties:write
+commands:
+  - CreateProperty
+  - CreateOffer
+  - CloseDeal
+events:
+  - PropertyCreated
+  - OfferCreated
+  - DealWon
+projections:
+  - PropertyList
+skills:
+  - real_estate_skill
+tools:
+  - property_tool
+  - deal_tool

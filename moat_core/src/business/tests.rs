@@ -506,8 +506,8 @@ async fn test_phase_9_business_operating_layer() {
     }
 
     // --- 2. Test Booking Workflow (Requires Authorization) ---
-    let booking_msg = InteractionMessage {
-        id: "m2".to_string(),
+    let reply_time = engine.handle_message(InteractionMessage {
+        id: "m2_booking".to_string(),
         business_id: "default_business".to_string(),
         thread_id: "".to_string(),
         customer_id: "+123456789".to_string(),
@@ -515,9 +515,55 @@ async fn test_phase_9_business_operating_layer() {
         direction: MessageDirection::Inbound,
         body: "I want to book a demo next week ASAP".to_string(),
         timestamp: chrono::Utc::now().timestamp(),
-    };
+    }).await.unwrap();
+    assert!(reply_time.body.contains("What date and time"));
 
-    let reply2 = engine.handle_message(booking_msg).await.unwrap();
+    let reply_loc = engine.handle_message(InteractionMessage {
+        id: "m2_time".to_string(),
+        business_id: "default_business".to_string(),
+        thread_id: reply_time.thread_id.clone(),
+        customer_id: "+123456789".to_string(),
+        channel: ChannelType::Whatsapp,
+        direction: MessageDirection::Inbound,
+        body: "next monday at 10am".to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+    }).await.unwrap();
+    assert!(reply_loc.body.contains("location"));
+
+    let reply_notes = engine.handle_message(InteractionMessage {
+        id: "m2_loc".to_string(),
+        business_id: "default_business".to_string(),
+        thread_id: reply_loc.thread_id.clone(),
+        customer_id: "+123456789".to_string(),
+        channel: ChannelType::Whatsapp,
+        direction: MessageDirection::Inbound,
+        body: "office".to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+    }).await.unwrap();
+    assert!(reply_notes.body.contains("details or notes"));
+
+    let reply_confirm = engine.handle_message(InteractionMessage {
+        id: "m2_notes".to_string(),
+        business_id: "default_business".to_string(),
+        thread_id: reply_notes.thread_id.clone(),
+        customer_id: "+123456789".to_string(),
+        channel: ChannelType::Whatsapp,
+        direction: MessageDirection::Inbound,
+        body: "no other details".to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+    }).await.unwrap();
+    assert!(reply_confirm.body.contains("confirm"));
+
+    let reply2 = engine.handle_message(InteractionMessage {
+        id: "m2_confirm".to_string(),
+        business_id: "default_business".to_string(),
+        thread_id: reply_confirm.thread_id.clone(),
+        customer_id: "+123456789".to_string(),
+        channel: ChannelType::Whatsapp,
+        direction: MessageDirection::Inbound,
+        body: "confirm".to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+    }).await.unwrap();
     assert!(reply2.body.contains("pending operator approval") || reply2.body.contains("proposal"));
 
     // Verify state in DB
@@ -961,17 +1007,59 @@ async fn test_end_to_end_booking_flow() {
         db_conn.execute("INSERT INTO business_identity_mappings (id, contact_id, channel, external_id) VALUES ('m1', 'c1', 'whatsapp', '+123456789')", ()).unwrap();
     }
 
-    // Step 1: Customer request
-    let customer_msg = InteractionMessage::new(
+    // Step 1: Customer request - Ask for time
+    let reply = runtime.handle_message(InteractionMessage::new(
         "default_business".to_string(),
-        "".to_string(), // will be resolved
+        "".to_string(),
         "+123456789".to_string(),
         ChannelType::Whatsapp,
         MessageDirection::Inbound,
         "Book a consultation tomorrow".to_string(),
-    );
+    )).await.unwrap();
+    assert!(reply.body.contains("What date and time"));
 
-    let reply = runtime.handle_message(customer_msg).await.unwrap();
+    // Ask for location
+    let reply = runtime.handle_message(InteractionMessage::new(
+        "default_business".to_string(),
+        reply.thread_id.clone(),
+        "+123456789".to_string(),
+        ChannelType::Whatsapp,
+        MessageDirection::Inbound,
+        "tomorrow at 5pm".to_string(),
+    )).await.unwrap();
+    assert!(reply.body.contains("location"));
+
+    // Ask for notes
+    let reply = runtime.handle_message(InteractionMessage::new(
+        "default_business".to_string(),
+        reply.thread_id.clone(),
+        "+123456789".to_string(),
+        ChannelType::Whatsapp,
+        MessageDirection::Inbound,
+        "online zoom".to_string(),
+    )).await.unwrap();
+    assert!(reply.body.contains("details or notes"));
+
+    // Ask for confirmation
+    let reply = runtime.handle_message(InteractionMessage::new(
+        "default_business".to_string(),
+        reply.thread_id.clone(),
+        "+123456789".to_string(),
+        ChannelType::Whatsapp,
+        MessageDirection::Inbound,
+        "no special notes".to_string(),
+    )).await.unwrap();
+    assert!(reply.body.contains("confirm"));
+
+    // Send confirmation
+    let reply = runtime.handle_message(InteractionMessage::new(
+        "default_business".to_string(),
+        reply.thread_id.clone(),
+        "+123456789".to_string(),
+        ChannelType::Whatsapp,
+        MessageDirection::Inbound,
+        "confirm".to_string(),
+    )).await.unwrap();
     assert!(reply.body.contains("pending operator approval"));
 
     // Step 2: Verification of qualification & authorization request created
@@ -2082,6 +2170,24 @@ async fn test_operator_control_plane_flows() {
         .unwrap();
     let thread_check = db::get_thread(&conn, thread_id).unwrap().unwrap();
     assert_eq!(thread_check.assigned_operator.unwrap(), "operator_dave");
+
+    // Set control mode back to AI to complete the booking flow automatically
+    operator_service
+        .set_thread_control_mode(thread_id, ThreadControlMode::Ai, "op_alice")
+        .await
+        .unwrap();
+
+    // Complete the booking flow so the opportunity progresses to AwaitingApproval
+    let _ = runtime.handle_interaction("whatsapp", "alice_phone", "tomorrow at 5pm").await.unwrap();
+    let _ = runtime.handle_interaction("whatsapp", "alice_phone", "online").await.unwrap();
+    let _ = runtime.handle_interaction("whatsapp", "alice_phone", "none").await.unwrap();
+    let _ = runtime.handle_interaction("whatsapp", "alice_phone", "confirm").await.unwrap();
+
+    // Set control mode back to Hybrid so the analytics human takeover rate assertion passes
+    operator_service
+        .set_thread_control_mode(thread_id, ThreadControlMode::Hybrid, "op_alice")
+        .await
+        .unwrap();
 
     // 5. Test pipeline_progression
     let opps = operator_service.list_opportunities().await.unwrap();

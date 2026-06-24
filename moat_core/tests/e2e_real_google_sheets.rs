@@ -18,7 +18,7 @@ async fn test_real_google_sheets_integration() {
 
     let sheet_id = std::env::var("TEST_SHEET_ID").unwrap_or_else(|_| "dummy_sheet".to_string());
 
-    let res = client.post(&format!("https://sheets.googleapis.com/v4/spreadsheets/{}/values/A1:append?valueInputOption=USER_ENTERED", sheet_id))
+    let res = client.post(format!("https://sheets.googleapis.com/v4/spreadsheets/{}/values/A1:append?valueInputOption=USER_ENTERED", sheet_id))
         .bearer_auth(token)
         .json(&payload)
         .send()

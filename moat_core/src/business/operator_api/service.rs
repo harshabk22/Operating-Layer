@@ -30,6 +30,12 @@ impl OperatorService {
         Ok(list)
     }
 
+    pub async fn list_all_authorizations(&self) -> Result<Vec<crate::business::models::AuthorizationDetailResponse>> {
+        let conn = self.runtime.db.lock().await;
+        let list = db::list_all_authorization_details(&conn)?;
+        Ok(list)
+    }
+
     pub async fn list_pending_escalations(&self) -> Result<Vec<OperatorEscalation>> {
         let conn = self.runtime.db.lock().await;
         let mut stmt = conn.prepare(

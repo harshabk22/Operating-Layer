@@ -42,14 +42,39 @@ impl LlmProvider for LocalStubProvider {
 }
 
 async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
-    let db_path = std::env::current_dir()?.join("moat_core").join("moat_core_restored.db");
+    let cwd = std::env::current_dir()?;
+    let base_dir = if cwd.ends_with("moat_core") {
+        cwd
+    } else {
+        cwd.join("moat_core")
+    };
+    let db_path = base_dir.join("business.db");
+    let seed_path = base_dir.join("moat_core_restored.db");
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
+    if !db_path.exists() && seed_path.exists() {
+        println!("[Bootstrap] business.db not found. Copying seed from moat_core_restored.db...");
+        std::fs::copy(&seed_path, &db_path)?;
+    }
+
+    // Delete legacy sessions.db file
+    if let Some(home) = dirs::home_dir() {
+        let sessions_db = home.join(".ageex").join("sessions.db");
+        if sessions_db.exists() {
+            println!("[Bootstrap] Deleting legacy sessions.db file...");
+            let _ = std::fs::remove_file(sessions_db);
+        }
+    }
+
     let conn = Connection::open(&db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+
+    // Drop legacy v2 tables if they exist
+    let _ = conn.execute("DROP TABLE IF EXISTS v2_events", []);
+    let _ = conn.execute("DROP TABLE IF EXISTS v2_snapshots", []);
 
     moat_core::business::db::prepare_tables(&conn)?;
     moat_core::communication::db::prepare_tables(&conn)?;
@@ -178,6 +203,23 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
             "[Bootstrap] Failed to start WhatsApp Baileys connector: {:?}",
             e
         );
+    }
+
+    // Bootload installed packages from business.db
+    {
+        println!("[Bootstrap] Bootloading installed packages from business.db...");
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let mut stmt = conn.prepare("SELECT id FROM projections WHERE name = 'PackageInstalled'")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for pkg_id in rows.flatten() {
+            println!("[Bootstrap] Loading package: {}", pkg_id);
+            if let Some(manifest) = moat_core::api::routes::read_package_manifest(&pkg_id) {
+                moat_core::api::routes::register_package_core(&manifest, &meta_brain).await;
+                println!("[Bootstrap] Package {} hydrated successfully.", pkg_id);
+            } else {
+                eprintln!("[Bootstrap] Warning: manifest not found for package {}", pkg_id);
+            }
+        }
     }
 
     Ok(runtime)

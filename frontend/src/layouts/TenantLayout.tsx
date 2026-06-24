@@ -10,7 +10,9 @@ import {
   FolderSync, 
   Activity, 
   LogOut,
-  HelpCircle
+  HelpCircle,
+  CheckSquare,
+  Calendar
 } from "lucide-react";
 import * as Icons from "lucide-react";
 import { useEffect, useState } from "react";
@@ -47,7 +49,7 @@ export default function TenantLayout() {
   const isActive = (path: string) => location.pathname === path;
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
+    <div id="app-layout" className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <aside className="w-full md:w-64 border-r bg-card/50 backdrop-blur-xl flex flex-col font-sans">
         <div className="p-6 border-b">
           <h1 className="text-xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">
@@ -93,6 +95,22 @@ export default function TenantLayout() {
               }`}
             >
               <Workflow className="h-4 w-4" /> Package Studio
+            </Link>
+            <Link 
+              to="/approvals" 
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isActive('/approvals') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
+              }`}
+            >
+              <CheckSquare className="h-4 w-4" /> Approvals
+            </Link>
+            <Link 
+              to="/calendar" 
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isActive('/calendar') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
+              }`}
+            >
+              <Calendar className="h-4 w-4" /> Calendar
             </Link>
           </div>
 

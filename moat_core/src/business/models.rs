@@ -294,6 +294,24 @@ pub struct AuthorizationRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationDetailResponse {
+    pub id: String,
+    pub thread_id: String,
+    pub engagement_id: String,
+    pub proposed_by: String,
+    pub status: AuthorizationStatus,
+    pub created_at: i64,
+    pub contact_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub booking_title: Option<String>,
+    pub booking_start_time: Option<i64>,
+    pub booking_end_time: Option<i64>,
+    pub decision_reason: Option<String>,
+    pub decision_by: Option<String>,
+    pub decision_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeQueryResult {
     pub document_id: String,
     pub title: String,

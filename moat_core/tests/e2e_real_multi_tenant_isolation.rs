@@ -13,7 +13,7 @@ async fn test_real_multi_tenant_isolation() {
 
     // Tenant 1 request
     let res1 = client
-        .get(&format!("{}/api/leads", api_url))
+        .get(format!("{}/api/leads", api_url))
         .bearer_auth(&tenant_1_token)
         .send()
         .await
@@ -21,7 +21,7 @@ async fn test_real_multi_tenant_isolation() {
 
     // Tenant 2 request
     let res2 = client
-        .get(&format!("{}/api/leads", api_url))
+        .get(format!("{}/api/leads", api_url))
         .bearer_auth(&tenant_2_token)
         .send()
         .await

@@ -445,7 +445,112 @@ impl ToolExecutor {
                     contact.id
                 ))
             }
-            unknown => anyhow::bail!("Unknown tool: {}", unknown),
+            "property_tool" => {
+                let action = args["action"].as_str().unwrap_or("schedule_viewing");
+                if action == "schedule_viewing" {
+                    let time_str = args["time"].as_str().unwrap_or("tomorrow");
+                    let prop_id = args["property_id"].as_str().unwrap_or("prop_default");
+                    let visit_id = format!("visit_{}", uuid::Uuid::new_v4());
+                    self.session_store.with_conn(|conn| {
+                        conn.execute(
+                            "INSERT INTO projections (id, business_id, name, version, timestamp) VALUES (?1, ?2, ?3, 1, ?4)
+                             ON CONFLICT(id) DO UPDATE SET version = version + 1, timestamp = ?4",
+                            rusqlite::params![&visit_id, "default_business", "PropertyVisitScheduled", chrono::Utc::now().timestamp_millis()]
+                        )
+                    })?;
+                    Ok(format!("[property_tool] Scheduled property viewing for property {} at {}.", prop_id, time_str))
+                } else {
+                    Ok("[property_tool] Property action processed.".to_string())
+                }
+            }
+            "deal_tool" => {
+                let deal_id = format!("deal_{}", uuid::Uuid::new_v4());
+                let value = args["value"].as_f64().or_else(|| args["amount"].as_f64()).unwrap_or(100000.0);
+                self.session_store.with_conn(|conn| {
+                    conn.execute(
+                        "INSERT INTO projections (id, business_id, name, version, timestamp) VALUES (?1, ?2, ?3, 1, ?4)
+                         ON CONFLICT(id) DO UPDATE SET version = version + 1, timestamp = ?4",
+                        rusqlite::params![&deal_id, "default_business", "DealCreated", chrono::Utc::now().timestamp_millis()]
+                    )?;
+                    let payload_str = serde_json::json!({ "id": deal_id, "value": value, "status": "pending" }).to_string();
+                    conn.execute(
+                        "INSERT INTO business_event_store (id, business_id, event_type, aggregate_id, payload, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), "default_business", "DealCreated", &deal_id, payload_str, chrono::Utc::now().timestamp_millis()]
+                    )
+                })?;
+                Ok(format!("[deal_tool] Created deal {} with value ${}.", deal_id, value))
+            }
+            "sales_lead_creator" => {
+                let lead_id = format!("lead_{}", uuid::Uuid::new_v4());
+                let name = args["name"].as_str().unwrap_or("New Lead");
+                let email = args["email"].as_str().unwrap_or("");
+                self.session_store.with_conn(|conn| {
+                    conn.execute(
+                        "INSERT INTO projections (id, business_id, name, version, timestamp) VALUES (?1, ?2, ?3, 1, ?4)
+                         ON CONFLICT(id) DO UPDATE SET version = version + 1, timestamp = ?4",
+                        rusqlite::params![&lead_id, "default_business", "LeadCreated", chrono::Utc::now().timestamp_millis()]
+                    )?;
+                    let payload_str = serde_json::json!({ "id": lead_id, "name": name, "email": email }).to_string();
+                    conn.execute(
+                        "INSERT INTO business_event_store (id, business_id, event_type, aggregate_id, payload, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), "default_business", "LeadCreated", &lead_id, payload_str, chrono::Utc::now().timestamp_millis()]
+                    )
+                })?;
+                Ok(format!("[sales_lead_creator] Created lead {} for {}.", lead_id, name))
+            }
+            "sales_lead_qualifier" => {
+                let lead_id = args["lead_id"].as_str().unwrap_or("");
+                if !lead_id.is_empty() {
+                    self.session_store.with_conn(|conn| {
+                        conn.execute(
+                            "INSERT INTO projections (id, business_id, name, version, timestamp) VALUES (?1, ?2, ?3, 1, ?4)
+                             ON CONFLICT(id) DO UPDATE SET name = ?3, version = version + 1, timestamp = ?4",
+                            rusqlite::params![lead_id, "default_business", "LeadQualified", chrono::Utc::now().timestamp_millis()]
+                        )
+                    })?;
+                    Ok(format!("[sales_lead_qualifier] Qualified lead {}.", lead_id))
+                } else {
+                    Ok("[sales_lead_qualifier] No lead_id provided.".to_string())
+                }
+            }
+            "notification_sender" => {
+                let recipient = args["recipient"].as_str().unwrap_or("Unknown");
+                let message = args["message"].as_str().unwrap_or("");
+                let notif_id = format!("notif_{}", uuid::Uuid::new_v4());
+                self.session_store.with_conn(|conn| {
+                    conn.execute(
+                        "INSERT INTO projections (id, business_id, name, version, timestamp) VALUES (?1, ?2, ?3, 1, ?4)
+                         ON CONFLICT(id) DO UPDATE SET version = version + 1, timestamp = ?4",
+                        rusqlite::params![&notif_id, "default_business", "NotificationSent", chrono::Utc::now().timestamp_millis()]
+                    )?;
+                    let payload_str = serde_json::json!({ "id": notif_id, "recipient": recipient, "message": message }).to_string();
+                    conn.execute(
+                        "INSERT INTO business_event_store (id, business_id, event_type, aggregate_id, payload, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), "default_business", "NotificationSent", &notif_id, payload_str, chrono::Utc::now().timestamp_millis()]
+                    )
+                })?;
+                Ok(format!("[notification_sender] Notification sent to recipient {}.", recipient))
+            }
+            unknown => {
+                let registry = crate::agent::tools::global_registry().read().unwrap();
+                if let Some(tool) = registry.get(unknown) {
+                    let intent = crate::agent::interaction_orchestrator::ActionIntent {
+                        thought: None,
+                        action: unknown.to_string(),
+                        target: args.get("target").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        payload: Some(args.clone()),
+                        reason: None,
+                    };
+                    match tool.execute(&intent).await {
+                        Ok(crate::agent::interaction_orchestrator::TaskStatus::Success { stdout }) => Ok(stdout),
+                        Ok(crate::agent::interaction_orchestrator::TaskStatus::Failed { stderr, .. }) => Err(anyhow::anyhow!("Dynamic tool execution failed: {}", stderr)),
+                        Err(e) => Err(anyhow::anyhow!("Dynamic tool error: {:?}", e)),
+                        _ => Err(anyhow::anyhow!("Dynamic tool execution did not succeed")),
+                    }
+                } else {
+                    anyhow::bail!("Unknown tool: {}", unknown)
+                }
+            }
         }
     }
 

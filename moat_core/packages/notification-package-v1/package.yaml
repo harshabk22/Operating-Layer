@@ -1,0 +1,36 @@
+id: notification-package-v1
+name: notification-package
+version: 1.0.0
+description: Notification routing, templates, and history log package
+routes:
+  - path: /operations/notifications
+    component: Notifications
+  - path: /operations/templates
+    component: Templates
+  - path: /operations/history
+    component: History
+navigation_entries:
+  - label: Operations
+    items:
+      - label: Notifications
+        path: /operations/notifications
+        icon: Bell
+      - label: Templates
+        path: /operations/templates
+        icon: FileText
+      - label: History
+        path: /operations/history
+        icon: History
+permissions:
+  - notifications:send
+  - notifications:read
+commands:
+  - SendNotification
+events:
+  - NotificationSent
+projections:
+  - NotificationLog
+skills:
+  - notification_skill
+tools:
+  - notification_sender

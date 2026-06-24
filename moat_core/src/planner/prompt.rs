@@ -39,65 +39,31 @@ IMPORTANT RULES:
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// All known built-in tool names, used as fallback when no agent spec restricts the tool set.
-pub(crate) const ALL_TOOLS: &[&str] = &[
-    "identity:resolve",
-    "opportunity:classify",
-    "engagement:propose",
-    "engagement:request_authorization",
-    "engagement:authorize",
-    "operator:escalate",
-    "knowledge:query",
-    "done",
-];
-
-/// Maps a tool name to its JSON schema description for prompt injection.
-/// Returns `None` for unknown tool names so they are silently excluded.
-pub(crate) fn tool_schema_entry(tool: &str) -> Option<(&'static str, &'static str)> {
-    match tool {
-        "identity:resolve" => Some(("identity:resolve", "Resolve messaging handle/channel to a contact ID. Creates a new contact if not found.")),
-        "opportunity:classify" => Some(("opportunity:classify", "Classify or update the lead/opportunity status for an interaction thread.")),
-        "engagement:propose" => Some(("engagement:propose", "Propose a new engagement or booking for a contact.")),
-        "engagement:request_authorization" => Some(("engagement:request_authorization", "Request operator approval for a proposed engagement before it is executed.")),
-        "engagement:authorize" => Some(("engagement:authorize", "Authorize and execute a pending engagement via the scheduling integration.")),
-        "operator:escalate" => Some(("operator:escalate", "Escalate the conversation thread to a human operator.")),
-        "knowledge:query" => Some(("knowledge:query", "Query the organizational knowledge base. Use when you need info to answer customer questions.")),
-        "done" => Some(("done", "Signal task completion and provide the final response to the user.")),
-        _ => None,
-    }
-}
-
-/// Build the ReAct system prompt with dynamic tool schema and skill injections.
-/// The caller is responsible for fetching synthesized skills and passing them in.
-pub(crate) fn build_react_system_prompt(
+pub fn build_react_system_prompt(
     active_agent: Option<&AgentSpec>,
     synthesized_skills: &[SynthesizedSkill],
     instruction_skills: &[crate::memory::skills::SkillDefinition],
 ) -> String {
     let mut prompt = REACT_SYSTEM_TEMPLATE.to_string();
 
-    // ── Dynamic ACTION SCHEMA based on agent-local allowed_tools ──
-    let tool_list: Vec<&str> = match active_agent {
+    let registry = crate::agent::tools::global_registry().read().unwrap();
+
+    let tool_list: Vec<String> = match active_agent {
         Some(spec) if !spec.allowed_tools.is_empty() => {
-            let mut tools: Vec<&str> = Vec::new();
+            let mut tools: Vec<String> = Vec::new();
             for tool in &spec.allowed_tools {
-                if let Some((name, _)) = tool_schema_entry(tool) {
-                    if !tools
-                        .iter()
-                        .any(|existing| existing.eq_ignore_ascii_case(name))
-                    {
-                        tools.push(name);
+                if registry.get(tool).is_some() {
+                    if !tools.iter().any(|existing| existing.eq_ignore_ascii_case(tool)) {
+                        tools.push(tool.clone());
                     }
                 }
             }
-            // Always include done — universally available.
-            for essential in &["done"] {
-                if !tools.iter().any(|t| t.eq_ignore_ascii_case(essential)) {
-                    tools.push(essential);
-                }
+            if !tools.iter().any(|t| t.eq_ignore_ascii_case("done")) {
+                tools.push("done".to_string());
             }
             tools
         }
-        _ => ALL_TOOLS.to_vec(),
+        _ => registry.names(),
     };
 
     prompt.push_str("\n\nJSON SCHEMA:\n");
@@ -122,8 +88,8 @@ If you are finished and ready to reply to the user, set state to "completed", le
     prompt.push_str("\n\nALLOWED ACTIONS SCHEMA:\n");
     prompt.push_str("For each item in the \"actions\" array, \"action\" must be one of the following allowed actions:\n");
     for tool_name in &tool_list {
-        if let Some((_, schema_desc)) = tool_schema_entry(tool_name) {
-            prompt.push_str(&format!("- \"{}\": {}\n", tool_name, schema_desc));
+        if let Some(tool) = registry.get(tool_name) {
+            prompt.push_str(&format!("- \"{}\": {}\n", tool_name, tool.description()));
         }
     }
 

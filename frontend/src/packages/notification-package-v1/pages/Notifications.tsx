@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -8,6 +9,9 @@ export default function Notifications() {
   const { toast } = useToast();
   const [message, setMessage] = useState('');
   const [recipient, setRecipient] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+
+  const { data: templates } = useData('/api/operations/templates');
 
   const sendMutation = useMutation({
     mutationFn: async (payload: { id: string, message: string, recipient: string }) => {
@@ -23,6 +27,7 @@ export default function Notifications() {
       toast({ title: 'Success', description: 'Notification sent successfully' });
       setMessage('');
       setRecipient('');
+      setSelectedTemplateId('');
       queryClient.invalidateQueries({ queryKey: ['/api/operations/notifications'] });
     },
     onError: () => {
@@ -35,6 +40,18 @@ export default function Notifications() {
     sendMutation.mutate({ id: `notif_${Date.now()}`, message, recipient });
   };
 
+  const handleTemplateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const templateId = e.target.value;
+    setSelectedTemplateId(templateId);
+    if (templateId) {
+      const templateList = templates ? Object.values(templates) : [];
+      const selectedTmpl: any = templateList.find((t: any) => t.id === templateId);
+      if (selectedTmpl) {
+        setMessage(selectedTmpl.body || '');
+      }
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-lg">
       <div>
@@ -44,6 +61,21 @@ export default function Notifications() {
 
       <div className="border rounded-md bg-card p-6 shadow-sm">
         <form onSubmit={handleSubmit} className="space-y-4">
+          {templates && Object.keys(templates).length > 0 && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Select Template (Optional)</label>
+              <select 
+                className="w-full p-2 border rounded-md bg-background text-sm" 
+                value={selectedTemplateId} 
+                onChange={handleTemplateChange}
+              >
+                <option value="">-- None (Custom Message) --</option>
+                {Object.values(templates).map((tmpl: any) => (
+                  <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="space-y-2">
             <label className="text-sm font-medium">Recipient</label>
             <input 

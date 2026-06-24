@@ -6,10 +6,10 @@ This report details key performance indicators persisted by the Business Operati
 
 | Metric KPI | Current Value |
 |---|---|
-| **Opportunities Created** | 200 |
+| **Opportunities Created** | 4 |
 | **Opportunities Converted** | 0 |
-| **Engagements Requested** | 0 |
+| **Engagements Requested** | 2 |
 | **Engagements Authorized** | 0 |
-| **Escalations Triggered** | 0 |
+| **Escalations Triggered** | 1 |
 
-*Last Updated: 2026-06-23T17:15:15.350127+00:00*
+*Last Updated: 2026-06-24T15:04:36.369164+00:00*

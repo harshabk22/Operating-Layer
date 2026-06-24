@@ -234,12 +234,25 @@ impl CustomerInteractionRuntime {
         super::db::insert_or_update_opportunity_score(&conn, &opp_score)?;
 
         let mut opp = opp;
-        opp.status = match opp_score.rating {
+        let new_status = match opp_score.rating {
             super::models::OpportunityRating::Critical => OpportunityStatus::Qualified,
             super::models::OpportunityRating::Hot => OpportunityStatus::EngagementPending,
             super::models::OpportunityRating::Warm => OpportunityStatus::Qualified,
             super::models::OpportunityRating::Cold => OpportunityStatus::Discovered,
         };
+
+        let status_priority = |s: OpportunityStatus| match s {
+            OpportunityStatus::Discovered => 1,
+            OpportunityStatus::Qualified => 2,
+            OpportunityStatus::EngagementPending => 3,
+            OpportunityStatus::Converted => 4,
+            OpportunityStatus::Disqualified => 0,
+            OpportunityStatus::Archived => 0,
+        };
+
+        if status_priority(new_status) > status_priority(opp.status) {
+            opp.status = new_status;
+        }
 
         if intent == "close" || message.body.contains("no thanks") {
             opp.status = OpportunityStatus::Disqualified;
@@ -291,11 +304,16 @@ impl CustomerInteractionRuntime {
 
         // 9. Evaluate Business Policy & Engagement Decision
         use super::models::EngagementDecision;
-        let decision = super::policy::BusinessPolicy::evaluate(
-            &intent,
-            &opp_score,
-            &objective_record.objective,
-        );
+        let msgs_history = super::db::list_messages(&conn, &thread.id)?;
+        let decision = if is_in_booking_flow(&msgs_history) {
+            EngagementDecision::RequestAuthorization
+        } else {
+            super::policy::BusinessPolicy::evaluate(
+                &intent,
+                &opp_score,
+                &objective_record.objective,
+            )
+        };
 
         let mut response_text = String::new();
         let mut should_run_llm = false;
@@ -355,52 +373,88 @@ impl CustomerInteractionRuntime {
                         .to_string();
             }
             EngagementDecision::RequestAuthorization => {
-                // Propose booking engagement
-                let engagement = super::workflow::propose_engagement(
-                    &conn,
-                    &contact.id,
-                    &thread.id,
-                    "Scheduled Consultation Slot",
-                    chrono::Utc::now().timestamp() + 86400,
-                    chrono::Utc::now().timestamp() + 86400 + 3600,
-                )?; // Request operator approval
-                let auth_req = crate::business::authorization::AuthorizationQueue::create_request(
-                    &conn,
-                    &engagement.id,
-                    "system",
-                )?;
+                let msgs = super::db::list_messages(&conn, &thread.id)?;
+                let (time_opt, loc_opt, notes_opt, _confirmed) = get_booking_details(&msgs);
 
-                let _ = crate::business::db::transition_opportunity_stage(
-                    &conn,
-                    self.notifier.as_ref(),
-                    &opp.id,
-                    PipelineStage::AwaitingApproval,
-                    "system",
-                    Some("Proposed booking proposal awaiting operator approval"),
-                );
+                if time_opt.is_none() {
+                    response_text = "What date and time would you like to book the appointment for?".to_string();
+                } else if loc_opt.is_none() {
+                    response_text = "Got it. What is the location (e.g. online, office address) for this appointment?".to_string();
+                } else if notes_opt.is_none() {
+                    response_text = "Thank you. Any other details or notes you'd like to specify?".to_string();
+                } else {
+                    let is_confirming = message.body.to_lowercase().contains("confirm");
+                    
+                    if is_confirming {
+                        let time_val = time_opt.unwrap();
+                        let loc_val = loc_opt.unwrap();
+                        let notes_val = notes_opt.unwrap();
 
-                // Notify
-                let _ = self
-                    .notifier
-                    .notify_new_authorization(&auth_req.id, &thread.id);
-                // Dispatch AuthorizationRequested
-                let auth_event = ConnectorEvent::AuthorizationRequested {
-                    business_id: message.business_id.clone(),
-                    thread_id: thread.id.clone(),
-                    request_id: auth_req.id.clone(),
-                    action: "engagement:request_authorization".to_string(),
-                    payload: serde_json::to_string(&auth_req).unwrap_or_default(),
-                };
-                crate::communication::db::persist_event(
-                    &conn,
-                    &auth_event,
-                    &message.channel.to_string(),
-                )?;
-                self.registry
-                    .dispatch_event(auth_event, &message.channel.to_string())
-                    .await?;
+                        // Store the full details inside the title so they show up clearly in the operator UI
+                        let title = format!("Appointment Slot (Time: {}, Location: {}, Details: {})", time_val, loc_val, notes_val);
 
-                response_text = "A booking proposal has been submitted and is pending operator approval. We will notify you once confirmed.".to_string();
+                        let engagement = super::workflow::propose_engagement(
+                            &conn,
+                            &contact.id,
+                            &thread.id,
+                            &title,
+                            chrono::Utc::now().timestamp() + 86400,
+                            chrono::Utc::now().timestamp() + 86400 + 3600,
+                        )?; // Request operator approval
+
+                        let auth_req = crate::business::authorization::AuthorizationQueue::create_request(
+                            &conn,
+                            &engagement.id,
+                            "system",
+                        )?;
+
+                        let _ = crate::business::db::transition_opportunity_stage(
+                            &conn,
+                            self.notifier.as_ref(),
+                            &opp.id,
+                            PipelineStage::AwaitingApproval,
+                            "system",
+                            Some("Proposed booking proposal awaiting operator approval"),
+                        );
+
+                        // Notify
+                        let _ = self
+                            .notifier
+                            .notify_new_authorization(&auth_req.id, &thread.id);
+
+                        // Dispatch AuthorizationRequested
+                        let auth_event = ConnectorEvent::AuthorizationRequested {
+                            business_id: message.business_id.clone(),
+                            thread_id: thread.id.clone(),
+                            request_id: auth_req.id.clone(),
+                            action: "engagement:request_authorization".to_string(),
+                            payload: serde_json::to_string(&auth_req).unwrap_or_default(),
+                        };
+                        crate::communication::db::persist_event(
+                            &conn,
+                            &auth_event,
+                            &message.channel.to_string(),
+                        )?;
+                        self.registry
+                            .dispatch_event(auth_event, &message.channel.to_string())
+                            .await?;
+
+                        response_text = "A booking proposal has been submitted and is pending operator approval. We will notify you once confirmed.".to_string();
+                    } else {
+                        let asked_confirm = msgs.iter().any(|m| m.sender == "business" && m.content.to_lowercase().contains("please reply 'confirm' to submit"));
+                        if !asked_confirm {
+                            let time_val = time_opt.unwrap();
+                            let loc_val = loc_opt.unwrap();
+                            let notes_val = notes_opt.unwrap();
+                            response_text = format!(
+                                "Great! I have all the details:\n- Appointment: Scheduled Consultation Slot\n- Time: {}\n- Location: {}\n- Details: {}\n\nPlease reply 'confirm' to submit this booking proposal for operator approval.",
+                                time_val, loc_val, notes_val
+                            );
+                        } else {
+                            response_text = "If you want to change any details, please let me know. Otherwise, please reply 'confirm' to submit the booking proposal for operator approval.".to_string();
+                        }
+                    }
+                }
             }
             EngagementDecision::ProposeEngagement => {
                 // Propose consulting engagement (auto-accepted or proposed)
@@ -557,29 +611,6 @@ impl CustomerInteractionRuntime {
             },
         )?;
 
-        if req.status != crate::business::models::AuthorizationStatus::Pending {
-            return Err(crate::MoatError::Orchestrator(format!(
-                "Cannot execute booking: request {} is not pending",
-                request_id
-            )));
-        }
-
-        conn.execute(
-            "UPDATE business_authorization_requests SET status = 'approved' WHERE id = ?1",
-            [request_id],
-        )?;
-
-        crate::business::db::update_thread_status(
-            &conn,
-            &req.thread_id,
-            crate::business::models::ThreadStatus::Active,
-        )?;
-        crate::business::db::update_engagement_status(
-            &conn,
-            &req.engagement_id,
-            crate::business::models::EngagementStatus::Authorized,
-        )?;
-
         let event_payload = serde_json::json!({
             "request_id": request_id,
             "engagement_id": req.engagement_id,
@@ -591,14 +622,15 @@ impl CustomerInteractionRuntime {
             request_id,
             &event_payload,
         )?;
+        drop(conn);
 
-        let job_payload = serde_json::json!({
-            "request_id": request_id
-        });
-        crate::business::jobs::queue::enqueue_job(&conn, "calendar_sync", job_payload, 5)?;
+        // We run the calendar sync job synchronously so the client is notified immediately!
+        crate::business::jobs::worker::execute_calendar_sync_job(self, request_id)
+            .await
+            .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
 
         let confirmation_msg =
-            "Confirmed: booking request has been approved and queued for scheduling.".to_string();
+            "Confirmed: booking request has been approved and scheduled.".to_string();
         Ok(confirmation_msg)
     }
 
@@ -739,4 +771,73 @@ impl CustomerInteractionRuntime {
         ));
         server.start(addr.to_string())
     }
+}
+
+fn get_booking_details(msgs: &[crate::business::models::MessageRecord]) -> (Option<String>, Option<String>, Option<String>, bool) {
+    let mut time = None;
+    let mut location = None;
+    let mut notes = None;
+    let mut confirmed = false;
+    
+    let mut start_idx = 0;
+    for (idx, msg) in msgs.iter().enumerate() {
+        if msg.sender == "business" && msg.content.to_lowercase().contains("booking proposal has been submitted") {
+            start_idx = idx + 1;
+        }
+    }
+    
+    let active_msgs = &msgs[start_idx..];
+    
+    for i in 0..active_msgs.len() {
+        if active_msgs[i].sender == "business" {
+            let content = active_msgs[i].content.to_lowercase();
+            if content.contains("what date and time") {
+                if i + 1 < active_msgs.len() && active_msgs[i + 1].sender == "contact" {
+                    time = Some(active_msgs[i + 1].content.clone());
+                }
+            } else if content.contains("what is the location") {
+                if i + 1 < active_msgs.len() && active_msgs[i + 1].sender == "contact" {
+                    location = Some(active_msgs[i + 1].content.clone());
+                }
+            } else if content.contains("any other details or notes") {
+                if i + 1 < active_msgs.len() && active_msgs[i + 1].sender == "contact" {
+                    notes = Some(active_msgs[i + 1].content.clone());
+                }
+            } else if content.contains("please reply 'confirm' to submit") {
+                if i + 1 < active_msgs.len() && active_msgs[i + 1].sender == "contact" {
+                    let reply = active_msgs[i + 1].content.to_lowercase();
+                    if reply.contains("confirm") {
+                        confirmed = true;
+                    }
+                }
+            }
+        }
+    }
+    
+    (time, location, notes, confirmed)
+}
+
+fn is_in_booking_flow(msgs: &[crate::business::models::MessageRecord]) -> bool {
+    let mut start_idx = 0;
+    for (idx, msg) in msgs.iter().enumerate() {
+        if msg.sender == "business" && msg.content.to_lowercase().contains("booking proposal has been submitted") {
+            start_idx = idx + 1;
+        }
+    }
+    
+    let active_msgs = &msgs[start_idx..];
+    
+    for msg in active_msgs {
+        if msg.sender == "business" {
+            let content = msg.content.to_lowercase();
+            if content.contains("what date and time")
+                || content.contains("what is the location")
+                || content.contains("any other details or notes")
+                || content.contains("please reply 'confirm' to submit")
+            {
+                return true;
+            }
+        }
+    }
+    false
 }

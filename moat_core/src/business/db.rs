@@ -1,9 +1,9 @@
 use super::models::{
-    AuthorizationRequest, AuthorizationStatus, BusinessIntegration, ContactIdentityMapping,
-    EngagementStatus, ExternalContact, InteractionThread, KnowledgeDocument, MessageRecord,
-    OperatorEscalation, Opportunity, OpportunityPipelineHistory, OpportunityStatus,
-    OwnerAuditRecord, PipelineStage, ResponseSuggestion, ScheduledEngagement, ThreadControlMode,
-    ThreadStatus,
+    AuthorizationDetailResponse, AuthorizationRequest, AuthorizationStatus, BusinessIntegration,
+    ContactIdentityMapping, EngagementStatus, ExternalContact, InteractionThread,
+    KnowledgeDocument, MessageRecord, OperatorEscalation, Opportunity,
+    OpportunityPipelineHistory, OpportunityStatus, OwnerAuditRecord, PipelineStage,
+    ResponseSuggestion, ScheduledEngagement, ThreadControlMode, ThreadStatus,
 };
 use crate::MoatError;
 use crate::MoatResult;
@@ -407,6 +407,54 @@ pub fn list_pending_authorization_requests(
         });
     }
     Ok(requests)
+}
+
+pub fn list_all_authorization_details(
+    conn: &Connection,
+) -> MoatResult<Vec<AuthorizationDetailResponse>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT 
+                a.id, a.thread_id, a.engagement_id, a.proposed_by, a.status, a.created_at,
+                c.name, c.phone,
+                e.title, e.start_time, e.end_time,
+                aud.reason, aud.performed_by, aud.performed_at
+             FROM business_authorization_requests a
+             LEFT JOIN business_scheduled_engagements e ON a.engagement_id = e.id
+             LEFT JOIN business_external_contacts c ON e.contact_id = c.id
+             LEFT JOIN business_owner_audit_trail aud ON a.id = aud.target_id
+             ORDER BY 
+                CASE a.status 
+                    WHEN 'pending' THEN 1 
+                    ELSE 2 
+                END ASC,
+                a.created_at DESC",
+        )
+        .map_err(MoatError::Database)?;
+
+    let mut rows = stmt.query([]).map_err(MoatError::Database)?;
+    let mut details = Vec::new();
+    while let Some(row) = rows.next().map_err(MoatError::Database)? {
+        let status_str: String = row.get::<_, String>(4).map_err(MoatError::Database)?;
+        details.push(AuthorizationDetailResponse {
+            id: row.get::<_, String>(0).map_err(MoatError::Database)?,
+            thread_id: row.get::<_, String>(1).map_err(MoatError::Database)?,
+            engagement_id: row.get::<_, String>(2).map_err(MoatError::Database)?,
+            proposed_by: row.get::<_, String>(3).map_err(MoatError::Database)?,
+            status: AuthorizationStatus::from_str(&status_str)
+                .unwrap_or(AuthorizationStatus::Pending),
+            created_at: row.get::<_, i64>(5).map_err(MoatError::Database)?,
+            contact_name: row.get::<_, Option<String>>(6).map_err(MoatError::Database)?,
+            contact_phone: row.get::<_, Option<String>>(7).map_err(MoatError::Database)?,
+            booking_title: row.get::<_, Option<String>>(8).map_err(MoatError::Database)?,
+            booking_start_time: row.get::<_, Option<i64>>(9).map_err(MoatError::Database)?,
+            booking_end_time: row.get::<_, Option<i64>>(10).map_err(MoatError::Database)?,
+            decision_reason: row.get::<_, Option<String>>(11).map_err(MoatError::Database)?,
+            decision_by: row.get::<_, Option<String>>(12).map_err(MoatError::Database)?,
+            decision_at: row.get::<_, Option<i64>>(13).map_err(MoatError::Database)?,
+        });
+    }
+    Ok(details)
 }
 
 fn get_encryption_key() -> String {

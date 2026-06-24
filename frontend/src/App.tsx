@@ -12,6 +12,8 @@ import Roles from './pages/Roles';
 import Connections from './pages/Connections';
 import Observability from './pages/Observability';
 import Login from './pages/Login';
+import Approvals from './pages/Approvals';
+import Calendar from './pages/Calendar';
 import { useData } from './lib/api';
 import { componentMap } from './packages/registry';
 import { WifiOff } from 'lucide-react';
@@ -88,6 +90,8 @@ function DynamicRoutesWrapper() {
         <Route path="roles" element={<Roles />} />
         <Route path="integrations" element={<Connections />} />
         <Route path="observability" element={<Observability />} />
+        <Route path="approvals" element={<Approvals />} />
+        <Route path="calendar" element={<Calendar />} />
         
         {/* Dynamically Injected Package Routes */}
         {dynamicRoutes}

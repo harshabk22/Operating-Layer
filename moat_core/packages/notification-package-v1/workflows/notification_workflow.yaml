@@ -1,0 +1,4 @@
+name: notification_workflow
+steps:
+  - id: dispatch
+    action: notification_sender

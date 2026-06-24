@@ -20,7 +20,7 @@ pub mod memory;
 pub mod planner;
 pub mod security;
 pub mod session;
-pub mod v2;
+pub mod package;
 
 // ============================================================
 // § SHARED — Error Taxonomy & Result Alias
