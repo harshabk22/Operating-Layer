@@ -1,16 +1,16 @@
-use crate::communication::connector::ChannelConnector;
-use crate::communication::db::{
+use moat_core::communication::connector::ChannelConnector;
+use moat_core::communication::db::{
     clear_session, delete_session_file, has_baileys_credentials, load_session_files,
     prepare_tables, save_session_file,
 };
-use crate::communication::types::{ChannelType, InteractionMessage, MessageDirection};
-use crate::communication::whatsapp::WhatsAppConnector;
-use crate::communication::whatsapp_baileys::connector::{
+use moat_core::communication::types::{ChannelType, InteractionMessage, MessageDirection};
+use crate::whatsapp::provider::WhatsAppConnector;
+use crate::whatsapp_baileys::connector::{
     WhatsAppBaileysConnector, WhatsAppMultiplexer,
 };
-use crate::communication::whatsapp_baileys::session::SessionState;
+use crate::whatsapp_baileys::session::SessionState;
 use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[test]
 fn test_store_persistence_and_encryption() {
@@ -66,7 +66,7 @@ fn test_store_persistence_and_encryption() {
 async fn test_multiplexer_routing() {
     let conn = Connection::open_in_memory().unwrap();
     prepare_tables(&conn).unwrap();
-    let conn_arc = Arc::new(Mutex::new(conn));
+    let conn_arc = Arc::new(tokio::sync::Mutex::new(conn));
 
     let business_connector = Arc::new(WhatsAppConnector::new(
         conn_arc.clone(),
@@ -75,6 +75,7 @@ async fn test_multiplexer_routing() {
     let baileys_connector = Arc::new(WhatsAppBaileysConnector::new(
         conn_arc.clone(),
         "default_business".to_string(),
+        3003,
     ));
 
     let multiplexer = WhatsAppMultiplexer::new(
@@ -103,7 +104,7 @@ async fn test_multiplexer_routing() {
 
     // 2. Insert Baileys credentials, should now use Baileys connector and return its specific "Baileys is not connected" error!
     {
-        let conn_lock = conn_arc.lock().unwrap();
+        let conn_lock = conn_arc.lock().await;
         save_session_file(
             &conn_lock,
             "default_business",
@@ -137,7 +138,7 @@ fn test_session_lifecycle_states() {
 
 #[test]
 fn test_jid_conversions() {
-    use crate::communication::whatsapp_baileys::connector::{
+    use crate::whatsapp_baileys::connector::{
         normalize_jid_to_external_id, external_id_to_jid,
     };
 

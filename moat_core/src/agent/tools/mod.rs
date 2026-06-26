@@ -2,7 +2,7 @@ pub mod executor;
 
 pub use executor::ToolExecutor;
 
-use crate::agent::interaction_orchestrator::{ActionIntent, TaskStatus};
+use crate::agent::types::{ActionIntent, TaskStatus};
 use crate::memory::meta_brain::PermissionFlags;
 use crate::MoatResult;
 use serde_json::Value;

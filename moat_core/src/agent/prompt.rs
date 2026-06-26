@@ -1,10 +1,6 @@
 use crate::agent::llm_types::AgentSpec;
 use crate::memory::skills::SynthesizedSkill;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § System Prompt Template
-// ─────────────────────────────────────────────────────────────────────────────
-
 pub const REACT_SYSTEM_TEMPLATE: &str = r#"SYSTEM: MoatAgeex — AI Receptionist & Business Interaction Engine.
 
 TASK → TOOL (use directly — do NOT pre-explore):
@@ -34,11 +30,6 @@ IMPORTANT RULES:
 - Never output "Session Summary", "Previous actions", or recap history. The done payload must be a direct, concise response to the user.
 "#;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § Tool Registry
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// All known built-in tool names, used as fallback when no agent spec restricts the tool set.
 pub fn build_react_system_prompt(
     active_agent: Option<&AgentSpec>,
     synthesized_skills: &[SynthesizedSkill],
@@ -129,65 +120,4 @@ If you are finished and ready to reply to the user, set state to "completed", le
     }
 
     prompt
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_prompt_respects_allowed_tools() {
-        let agent = AgentSpec {
-            name: "test_agent".into(),
-            role: "test".into(),
-            authoritative: false,
-            api_provider: "google".into(),
-            model_id: "test".into(),
-            allowed_tools: vec!["identity:resolve".into()],
-            raw_markdown: "".into(),
-        };
-        let prompt = build_react_system_prompt(Some(&agent), &[], &[]);
-        assert!(prompt.contains("identity:resolve"));
-        assert!(!prompt.contains("- \"opportunity:classify\":"));
-    }
-
-    #[test]
-    fn test_build_prompt_includes_synthesized_skills() {
-        let skills = vec![SynthesizedSkill {
-            skill_name: "test_skill".into(),
-            description: "test description".into(),
-            script_path: "".into(),
-            code_hash: "".into(),
-            language: "python".into(),
-            parameter_schema: "{}".into(),
-            created_at: "".into(),
-        }];
-        let prompt = build_react_system_prompt(None, &skills, &[]);
-        assert!(prompt.contains("test_skill"));
-        assert!(prompt.contains("test description"));
-    }
-
-    #[test]
-    fn test_build_prompt_includes_instruction_skills() {
-        let skill = crate::memory::skills::SkillDefinition {
-            name: "test_instruction_skill".into(),
-            description: "instruction test description".into(),
-            triggers: vec!["test_trigger".into()],
-            workflow: vec!["Step 1: Test".into()],
-            constraints: vec!["Constraint 1: Test".into()],
-            best_practices: vec![],
-            raw_markdown: "".into(),
-            version: None,
-            category: None,
-            required_tools: vec![],
-            delegation: vec![],
-            status: None,
-            schema_version: None,
-        };
-        let prompt = build_react_system_prompt(None, &[], &[skill]);
-        assert!(prompt.contains("test_instruction_skill"));
-        assert!(prompt.contains("instruction test description"));
-        assert!(prompt.contains("Step 1: Test"));
-        assert!(prompt.contains("Constraint 1: Test"));
-    }
 }

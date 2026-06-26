@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::agent::execution::journal_chain::{ChainJournal, JournalOperation};
-use crate::agent::interaction_orchestrator::ActionIntent;
+use crate::agent::types::ActionIntent;
 use crate::memory::meta_brain::ExecutionPolicy;
 use crate::memory::rule_store::RuleConflictReview;
 use crate::memory::skills::{sha256_hex, SkillProposal};
@@ -606,7 +606,7 @@ pub fn build_generic_consent_request(
 #[cfg(test)]
 mod tests {
     use super::{build_consent_request, build_generic_consent_request, ConsentRequest};
-    use crate::agent::interaction_orchestrator::ActionIntent;
+    use crate::agent::types::ActionIntent;
     use serde_json::json;
 
     #[test]

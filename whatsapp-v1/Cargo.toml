@@ -1,0 +1,20 @@
+[package]
+name = "whatsapp-v1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+moat_core = { path = "../moat_core" }
+tokio = { version = "1.37", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+async-trait = "0.1"
+dirs = "5"
+rusqlite = "0.39.0"
+axum = { version = "0.7", features = ["ws"] }
+base64 = "0.22"
+anyhow = "1.0"

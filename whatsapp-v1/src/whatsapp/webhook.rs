@@ -1,5 +1,5 @@
-use crate::agent::execution::journal_chain::hmac_sha256;
-use crate::business::runtime::CustomerInteractionRuntime;
+use moat_core::agent::execution::journal_chain::hmac_sha256;
+use moat_core::business::runtime::CustomerInteractionRuntime;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -140,10 +140,10 @@ impl WhatsAppWebhookServer {
                                             let idempotency_key = format!("whatsapp:{}", msg_id);
                                             let status = {
                                                 let conn = self.db.lock().await;
-                                                crate::business::reliability::idempotency::try_acquire(&conn, &idempotency_key)
-                                                    .unwrap_or(crate::business::reliability::idempotency::IdempotencyStatus::InFlight)
+                                                moat_core::business::reliability::idempotency::try_acquire(&conn, &idempotency_key)
+                                                    .unwrap_or(moat_core::business::reliability::idempotency::IdempotencyStatus::InFlight)
                                             };
-                                            if let crate::business::reliability::idempotency::IdempotencyStatus::Completed { response } = &status {
+                                            if let moat_core::business::reliability::idempotency::IdempotencyStatus::Completed { response } = &status {
                                                 let http_resp = format!(
                                                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                                                     response.len(),
@@ -152,7 +152,7 @@ impl WhatsAppWebhookServer {
                                                 let _ = stream.write_all(http_resp.as_bytes()).await;
                                                 return Ok(());
                                             }
-                                            if status == crate::business::reliability::idempotency::IdempotencyStatus::InFlight {
+                                            if status == moat_core::business::reliability::idempotency::IdempotencyStatus::InFlight {
                                                 let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
                                                 let _ = stream.write_all(response.as_bytes()).await;
                                                 return Ok(());
@@ -178,7 +178,7 @@ impl WhatsAppWebhookServer {
                                             {
                                                 let conn = self.db.lock().await;
                                                 let existing =
-                                                    crate::business::db::get_contact_by_identity(
+                                                    moat_core::business::db::get_contact_by_identity(
                                                         &conn,
                                                         "whatsapp",
                                                         &external_id,
@@ -187,7 +187,7 @@ impl WhatsAppWebhookServer {
                                                 if existing.is_none() {
                                                     let new_id = uuid::Uuid::new_v4().to_string();
                                                     let contact =
-                                                        crate::business::models::ExternalContact {
+                                                        moat_core::business::models::ExternalContact {
                                                             id: new_id.clone(),
                                                             name: Some(profile_name),
                                                             email: None,
@@ -197,23 +197,23 @@ impl WhatsAppWebhookServer {
                                                             updated_at: chrono::Utc::now()
                                                                 .timestamp(),
                                                         };
-                                                    let _ = crate::business::db::insert_contact(
+                                                    let _ = moat_core::business::db::insert_contact(
                                                         &conn, &contact,
                                                     );
 
-                                                    let mapping = crate::business::models::ContactIdentityMapping {
+                                                    let mapping = moat_core::business::models::ContactIdentityMapping {
                                                         id: uuid::Uuid::new_v4().to_string(),
                                                         contact_id: new_id.clone(),
                                                         channel: "whatsapp".to_string(),
                                                         external_id: external_id.clone(),
                                                     };
-                                                    let _ = crate::business::db::insert_identity_mapping(&conn, &mapping);
+                                                    let _ = moat_core::business::db::insert_identity_mapping(&conn, &mapping);
                                                 }
                                             };
 
                                             {
                                                 let conn = self.db.lock().await;
-                                                let _ = crate::business::db::increment_kpi_metric(
+                                                let _ = moat_core::business::db::increment_kpi_metric(
                                                     &conn,
                                                     "messages_received",
                                                 );
@@ -228,11 +228,11 @@ impl WhatsAppWebhookServer {
                                                 let conn = self.db.lock().await;
                                                 match &reply_res {
                                                     Ok(reply_body) => {
-                                                        let _ = crate::business::reliability::idempotency::complete(&conn, &idempotency_key, reply_body);
+                                                        let _ = moat_core::business::reliability::idempotency::complete(&conn, &idempotency_key, reply_body);
                                                     }
                                                     Err(e) => {
                                                         eprintln!("[WhatsApp Webhook] Error handling interaction: {:?}", e);
-                                                        let _ = crate::business::reliability::idempotency::fail(&conn, &idempotency_key);
+                                                        let _ = moat_core::business::reliability::idempotency::fail(&conn, &idempotency_key);
                                                     }
                                                 }
                                             }

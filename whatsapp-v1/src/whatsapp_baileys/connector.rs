@@ -1,23 +1,25 @@
 const BRIDGE_JS: &str = include_str!("bridge/bridge.js");
 const PACKAGE_JSON: &str = include_str!("bridge/package.json");
 
-use crate::business::runtime::CustomerInteractionRuntime;
-use crate::communication::connector::ChannelConnector;
-use crate::communication::types::{ChannelType, InteractionMessage};
-use crate::MoatError;
-use crate::MoatResult;
+use moat_core::business::runtime::CustomerInteractionRuntime;
+use moat_core::communication::connector::ChannelConnector;
+use moat_core::communication::types::{ChannelType, InteractionMessage};
+use moat_core::MoatError;
+use moat_core::MoatResult;
 use async_trait::async_trait;
 use reqwest::Client;
 use rusqlite::Connection;
 use std::fs;
 use std::process::Child;
 use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::atomic::{AtomicU16, Ordering};
+use tokio::sync::Mutex as TokioMutex;
 
 #[derive(Clone)]
 pub struct WhatsAppBaileysConnector {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<TokioMutex<Connection>>,
     business_id: String,
-    port: u16,
+    port: Arc<AtomicU16>,
     child: Arc<Mutex<Option<Child>>>,
     runtime: Arc<RwLock<Option<Weak<CustomerInteractionRuntime>>>>,
     latest_qr: Arc<Mutex<Option<String>>>,
@@ -26,16 +28,11 @@ pub struct WhatsAppBaileysConnector {
 }
 
 impl WhatsAppBaileysConnector {
-    pub fn new(db: Arc<Mutex<Connection>>, business_id: String) -> Self {
-        let port = std::env::var("WHATSAPP_BAILEYS_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(3003);
-
+    pub fn new(db: Arc<TokioMutex<Connection>>, business_id: String, port: u16) -> Self {
         Self {
             db,
             business_id,
-            port,
+            port: Arc::new(AtomicU16::new(port)),
             child: Arc::new(Mutex::new(None)),
             runtime: Arc::new(RwLock::new(None)),
             latest_qr: Arc::new(Mutex::new(None)),
@@ -44,20 +41,30 @@ impl WhatsAppBaileysConnector {
         }
     }
 
+    pub async fn update_settings(&self, port: u16) -> MoatResult<()> {
+        let old_port = self.port.swap(port, Ordering::Relaxed);
+        if old_port != port {
+            println!("[Baileys] Port changed from {} to {}. Restarting bridge...", old_port, port);
+            self.start_bridge().await?;
+        }
+        Ok(())
+    }
+
     pub fn set_runtime(&self, runtime: Weak<CustomerInteractionRuntime>) {
         let mut rt = self.runtime.write().unwrap();
         *rt = Some(runtime);
     }
 
-    pub async fn start(self: &Arc<Self>) -> MoatResult<()> {
-        self.spawn_subprocess()?;
+    pub async fn start_bridge(&self) -> MoatResult<()> {
+        self.shutdown().await?;
+        self.spawn_subprocess().await?;
 
-        // Wait for health check to succeed
+        let port_val = self.port.load(Ordering::Relaxed);
         let mut ready = false;
         for _ in 0..50 {
             if let Ok(resp) = self
                 .client
-                .get(format!("http://127.0.0.1:{}/health", self.port))
+                .get(format!("http://127.0.0.1:{}/health", port_val))
                 .send()
                 .await
             {
@@ -74,6 +81,36 @@ impl WhatsAppBaileysConnector {
                 "WhatsApp bridge failed to start".to_string(),
             ));
         }
+        Ok(())
+    }
+
+    pub async fn connect(&self) -> MoatResult<()> {
+        self.start_bridge().await
+    }
+
+    pub async fn disconnect(&self) -> MoatResult<()> {
+        self.shutdown().await?;
+
+        {
+            let conn = self.db.lock().await;
+            let _ = moat_core::communication::db::clear_session(&conn, &self.business_id, "whatsapp_baileys");
+        }
+
+        let home = dirs::home_dir().ok_or_else(|| MoatError::Orchestrator("No home dir".to_string()))?;
+        let session_dir = home.join(".ageex").join("whatsapp_baileys").join("session");
+        if session_dir.exists() {
+            let _ = std::fs::remove_dir_all(&session_dir);
+            let _ = std::fs::create_dir_all(&session_dir);
+        }
+
+        *self.latest_status.lock().unwrap() = "unpaired".to_string();
+        *self.latest_qr.lock().unwrap() = None;
+
+        Ok(())
+    }
+
+    pub async fn start(self: &Arc<Self>) -> MoatResult<()> {
+        self.start_bridge().await?;
 
         // Spawn watcher loops
         let self_clone1 = self.clone();
@@ -94,7 +131,7 @@ impl WhatsAppBaileysConnector {
         Ok(())
     }
 
-    fn spawn_subprocess(&self) -> MoatResult<()> {
+    async fn spawn_subprocess(&self) -> MoatResult<()> {
         let home =
             dirs::home_dir().ok_or_else(|| MoatError::Orchestrator("No home dir".to_string()))?;
         let bridge_dir = home.join(".ageex").join("whatsapp_baileys");
@@ -133,16 +170,17 @@ impl WhatsAppBaileysConnector {
         fs::create_dir_all(&session_dir).map_err(|e| MoatError::Orchestrator(e.to_string()))?;
 
         // Populate directory from SQLite
-        let sync = crate::communication::whatsapp_baileys::store::DirectorySync::new(
+        let sync = crate::whatsapp_baileys::store::DirectorySync::new(
             self.db.clone(),
             self.business_id.clone(),
             "whatsapp_baileys".to_string(),
             session_dir.to_str().unwrap().to_string(),
         );
-        sync.populate_directory()?;
+        sync.populate_directory().await?;
 
         let node_bin = "node";
-        let port_str = self.port.to_string();
+        let port_val = self.port.load(Ordering::Relaxed);
+        let port_str = port_val.to_string();
         let session_str = session_dir.to_str().unwrap().to_string();
 
         let child = std::process::Command::new(node_bin)
@@ -167,7 +205,7 @@ impl WhatsAppBaileysConnector {
             None => return,
         };
         let session_dir = home.join(".ageex").join("whatsapp_baileys").join("session");
-        let sync = crate::communication::whatsapp_baileys::store::DirectorySync::new(
+        let sync = crate::whatsapp_baileys::store::DirectorySync::new(
             self.db.clone(),
             self.business_id.clone(),
             "whatsapp_baileys".to_string(),
@@ -176,7 +214,7 @@ impl WhatsAppBaileysConnector {
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            if let Err(e) = sync.sync_to_db() {
+            if let Err(e) = sync.sync_to_db().await {
                 eprintln!("[Baileys Sync] Error syncing to DB: {:?}", e);
             }
         }
@@ -196,17 +234,18 @@ impl WhatsAppBaileysConnector {
                 None => continue,
             };
 
-            let url = format!("http://127.0.0.1:{}/messages", self.port);
+            let port_val = self.port.load(Ordering::Relaxed);
+            let url = format!("http://127.0.0.1:{}/messages", port_val);
             if let Ok(resp) = self.client.get(&url).send().await {
-                match resp.json::<Vec<crate::communication::whatsapp_baileys::events::BaileysInboundMessage>>().await {
+                match resp.json::<Vec<crate::whatsapp_baileys::events::BaileysInboundMessage>>().await {
                     Ok(messages) => {
                         for msg in messages {
                             let idempotency_key = format!("whatsapp_baileys:{}", msg.message_id);
 
                             let is_new = {
                                 let conn = runtime.db.lock().await;
-                                match crate::business::reliability::idempotency::try_acquire(&conn, &idempotency_key) {
-                                    Ok(crate::business::reliability::idempotency::IdempotencyStatus::Acquired) => true,
+                                match moat_core::business::reliability::idempotency::try_acquire(&conn, &idempotency_key) {
+                                    Ok(moat_core::business::reliability::idempotency::IdempotencyStatus::Acquired) => true,
                                     _ => false,
                                 }
                             };
@@ -219,10 +258,10 @@ impl WhatsAppBaileysConnector {
 
                             {
                                 let conn = runtime.db.lock().await;
-                                let existing = crate::business::db::get_contact_by_identity(&conn, "whatsapp", &external_id).unwrap_or(None);
+                                let existing = moat_core::business::db::get_contact_by_identity(&conn, "whatsapp", &external_id).unwrap_or(None);
                                 if existing.is_none() {
                                     let contact_id = uuid::Uuid::new_v4().to_string();
-                                    let contact = crate::business::models::ExternalContact {
+                                    let contact = moat_core::business::models::ExternalContact {
                                         id: contact_id.clone(),
                                         name: Some(msg.sender_name.clone()),
                                         email: None,
@@ -230,19 +269,19 @@ impl WhatsAppBaileysConnector {
                                         created_at: chrono::Utc::now().timestamp(),
                                         updated_at: chrono::Utc::now().timestamp(),
                                     };
-                                    let _ = crate::business::db::insert_contact(&conn, &contact);
+                                    let _ = moat_core::business::db::insert_contact(&conn, &contact);
 
-                                    let mapping = crate::business::models::ContactIdentityMapping {
+                                    let mapping = moat_core::business::models::ContactIdentityMapping {
                                         id: uuid::Uuid::new_v4().to_string(),
                                         contact_id,
                                         channel: "whatsapp".to_string(),
                                         external_id: external_id.clone(),
                                     };
-                                    let _ = crate::business::db::insert_identity_mapping(&conn, &mapping);
+                                    let _ = moat_core::business::db::insert_identity_mapping(&conn, &mapping);
                                 }
 
-                                let _ = crate::business::db::increment_kpi_metric(&conn, "messages_received");
-                                let _ = crate::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_messages_received");
+                                let _ = moat_core::business::db::increment_kpi_metric(&conn, "messages_received");
+                                let _ = moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_messages_received");
                             }
 
                             let reply_res = runtime.handle_interaction("whatsapp", &external_id, &msg.body).await;
@@ -251,11 +290,11 @@ impl WhatsAppBaileysConnector {
                                 let conn = runtime.db.lock().await;
                                 match reply_res {
                                     Ok(reply) => {
-                                        let _ = crate::business::reliability::idempotency::complete(&conn, &idempotency_key, &reply);
+                                        let _ = moat_core::business::reliability::idempotency::complete(&conn, &idempotency_key, &reply);
                                     }
                                     Err(e) => {
                                         eprintln!("[Baileys Connector] Error handling interaction: {:?}", e);
-                                        let _ = crate::business::reliability::idempotency::fail(&conn, &idempotency_key);
+                                        let _ = moat_core::business::reliability::idempotency::fail(&conn, &idempotency_key);
                                     }
                                 }
                             }
@@ -275,7 +314,8 @@ impl WhatsAppBaileysConnector {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-            let url = format!("http://127.0.0.1:{}/health", self.port);
+            let port_val = self.port.load(Ordering::Relaxed);
+            let url = format!("http://127.0.0.1:{}/health", port_val);
             let state_opt = if let Ok(resp) = self.client.get(&url).send().await {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     json.get("status")
@@ -288,7 +328,19 @@ impl WhatsAppBaileysConnector {
                 None
             };
 
-            let current_state = state_opt.unwrap_or_else(|| "disconnected".to_string());
+            let has_creds = {
+                let conn = self.db.lock().await;
+                moat_core::communication::db::has_baileys_credentials(&conn, &self.business_id)
+                    .unwrap_or(false)
+            };
+
+            let current_state = state_opt.unwrap_or_else(|| {
+                if has_creds {
+                    "disconnected".to_string()
+                } else {
+                    "unpaired".to_string()
+                }
+            });
 
             if current_state != prev_state {
                 println!(
@@ -296,23 +348,23 @@ impl WhatsAppBaileysConnector {
                     prev_state, current_state
                 );
 
-                let conn = self.db.lock().unwrap();
+                let conn = self.db.lock().await;
                 if current_state == "connected" {
                     if prev_state == "reconnecting" || prev_state == "disconnected" {
-                        let _ = crate::business::db::increment_kpi_metric(
+                        let _ = moat_core::business::db::increment_kpi_metric(
                             &conn,
                             "whatsapp_baileys_reconnect_count",
                         );
                     }
                 } else if current_state == "disconnected" || current_state == "reconnecting" {
                     if prev_state == "connected" {
-                        let _ = crate::business::db::increment_kpi_metric(
+                        let _ = moat_core::business::db::increment_kpi_metric(
                             &conn,
                             "whatsapp_baileys_disconnect_count",
                         );
                     }
                 } else if current_state == "pairing" && prev_state == "unpaired" {
-                    let _ = crate::business::db::increment_kpi_metric(
+                    let _ = moat_core::business::db::increment_kpi_metric(
                         &conn,
                         "whatsapp_baileys_pairing_count",
                     );
@@ -323,7 +375,7 @@ impl WhatsAppBaileysConnector {
             }
 
             if prev_state == "pairing" {
-                let qr_url = format!("http://127.0.0.1:{}/qr", self.port);
+                let qr_url = format!("http://127.0.0.1:{}/qr", port_val);
                 if let Ok(resp) = self.client.get(&qr_url).send().await {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                         let qr = json
@@ -338,7 +390,21 @@ impl WhatsAppBaileysConnector {
             }
         }
     }
+
+    pub async fn shutdown(&self) -> MoatResult<()> {
+        let mut lock = self.child.lock().unwrap();
+        if let Some(mut child) = lock.take() {
+            println!(
+                "[Baileys] Terminating Node bridge subprocess (PID: {})...",
+                child.id()
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
 }
+
 
 impl Drop for WhatsAppBaileysConnector {
     fn drop(&mut self) {
@@ -349,6 +415,7 @@ impl Drop for WhatsAppBaileysConnector {
                 child.id()
             );
             let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -391,7 +458,7 @@ impl ChannelConnector for WhatsAppBaileysConnector {
 
         let mut target_customer_id = message.customer_id.clone();
         if !target_customer_id.starts_with("whatsapp:") {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().await;
             let table_exists: bool = db
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_identity_mappings'",
@@ -420,7 +487,8 @@ impl ChannelConnector for WhatsAppBaileysConnector {
         }
 
         let jid = external_id_to_jid(&target_customer_id);
-        let url = format!("http://127.0.0.1:{}/send", self.port);
+        let port_val = self.port.load(Ordering::Relaxed);
+        let url = format!("http://127.0.0.1:{}/send", port_val);
         let payload = serde_json::json!({
             "chatId": jid,
             "message": message.body,
@@ -431,18 +499,21 @@ impl ChannelConnector for WhatsAppBaileysConnector {
             .post(&url)
             .json(&payload)
             .send()
-            .await
-            .map_err(|e| {
-                let conn = self.db.lock().unwrap();
-                let _ =
-                    crate::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_failures");
-                MoatError::Orchestrator(format!("Failed to send Baileys message: {}", e))
-            })?;
+            .await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                let conn = self.db.lock().await;
+                let _ = moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_failures");
+                return Err(MoatError::Orchestrator(format!("Failed to send Baileys message: {}", e)));
+            }
+        };
 
         if !resp.status().is_success() {
             let err_text = resp.text().await.unwrap_or_default();
-            let conn = self.db.lock().unwrap();
-            let _ = crate::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_failures");
+            let conn = self.db.lock().await;
+            let _ = moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_failures");
             return Err(MoatError::Orchestrator(format!(
                 "Baileys bridge returned error: {}",
                 err_text
@@ -450,10 +521,10 @@ impl ChannelConnector for WhatsAppBaileysConnector {
         }
 
         {
-            let conn = self.db.lock().unwrap();
-            let _ = crate::business::db::increment_kpi_metric(&conn, "messages_sent");
+            let conn = self.db.lock().await;
+            let _ = moat_core::business::db::increment_kpi_metric(&conn, "messages_sent");
             let _ =
-                crate::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_messages_sent");
+                moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_baileys_messages_sent");
         }
 
         Ok(())
@@ -489,16 +560,16 @@ impl ChannelConnector for WhatsAppBaileysConnector {
 
 // WhatsApp Multiplexer
 pub struct WhatsAppMultiplexer {
-    business: Arc<crate::communication::whatsapp::WhatsAppConnector>,
+    business: Arc<crate::whatsapp::provider::WhatsAppConnector>,
     baileys: Arc<WhatsAppBaileysConnector>,
-    db: Arc<Mutex<Connection>>,
+    db: Arc<TokioMutex<Connection>>,
 }
 
 impl WhatsAppMultiplexer {
     pub fn new(
-        business: Arc<crate::communication::whatsapp::WhatsAppConnector>,
+        business: Arc<crate::whatsapp::provider::WhatsAppConnector>,
         baileys: Arc<WhatsAppBaileysConnector>,
-        db: Arc<Mutex<Connection>>,
+        db: Arc<TokioMutex<Connection>>,
     ) -> Self {
         Self {
             business,
@@ -508,8 +579,8 @@ impl WhatsAppMultiplexer {
     }
 
     async fn is_baileys_active(&self) -> bool {
-        let conn = self.db.lock().unwrap();
-        crate::communication::db::has_baileys_credentials(&conn, "default_business")
+        let conn = self.db.lock().await;
+        moat_core::communication::db::has_baileys_credentials(&conn, "default_business")
             .unwrap_or(false)
     }
 }

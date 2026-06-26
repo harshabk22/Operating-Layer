@@ -31,7 +31,7 @@ impl FrozenPrefix {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| agent_name.to_string());
         let persona_version = 1u32;
-        let system_prompt = crate::planner::prompt::build_react_system_prompt(agent_spec, &[], &[]);
+        let system_prompt = crate::agent::prompt::build_react_system_prompt(agent_spec, &[], &[]);
 
         let mut hasher = Sha256::new();
         hasher.update(persona_text.as_bytes());

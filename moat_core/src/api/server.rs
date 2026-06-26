@@ -21,12 +21,25 @@ pub struct ApiState {
     pub auth_store: Arc<AuthStore>,
 }
 
+fn get_frontend_dist_dir() -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if cwd.join("frontend/dist").exists() {
+        cwd.join("frontend/dist")
+    } else if cwd.parent().map(|p| p.join("frontend/dist").exists()).unwrap_or(false) {
+        cwd.parent().unwrap().join("frontend/dist")
+    } else {
+        std::path::PathBuf::from("../frontend/dist")
+    }
+}
+
 async fn serve_index() -> impl axum::response::IntoResponse {
-    match tokio::fs::read_to_string("../frontend/dist/index.html").await {
+    let path = get_frontend_dist_dir().join("index.html");
+    match tokio::fs::read_to_string(path).await {
         Ok(html) => axum::response::Html(html).into_response(),
         Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
     }
 }
+
 
 pub async fn start_api_server(
     runtime: Arc<CustomerInteractionRuntime>,
@@ -74,15 +87,16 @@ pub async fn start_api_server(
         // Analytics Endpoints
         .route("/analytics/overview", get(analytics_overview_handler))
 
-        // WhatsApp Personal QR Endpoint
-        .route("/connectors/whatsapp/qr", get(whatsapp_qr_handler))
-        // WhatsApp Personal Status Endpoint
-        .route("/connectors/whatsapp/status", get(whatsapp_status_handler))
+
         // WebSocket endpoint
         .route("/ws", get(ws_handler))
         // Google Connections Endpoints
         .route("/connections/google/connect", post(google_connect_handler))
         .route("/connections/google/status", get(google_status_handler))
+        .route(
+            "/connections/google/oauth_config",
+            get(get_google_oauth_config_handler).post(save_google_oauth_config_handler),
+        )
         .route(
             "/connections/google/disconnect",
             post(google_disconnect_handler),
@@ -168,7 +182,7 @@ pub async fn start_api_server(
             require_auth(secured_sessions.clone(), req, next)
         }));
 
-    let api_routes = Router::new()
+    let mut api_routes = Router::new()
         .route("/login", post(login_handler))
         .route("/logout", post(logout_handler))
         .route("/oauth/callback", get(oauth_callback_handler))
@@ -176,11 +190,21 @@ pub async fn start_api_server(
         .merge(auth_api_router)
         .merge(owner_api_router);
 
+    if let Some(registry_lock) = crate::package::DYNAMIC_PACKAGE_REGISTRY.get() {
+        let registry = registry_lock.read();
+        for package in registry.values() {
+            api_routes = package.register_routes(api_routes);
+        }
+    }
+
+    let dist_dir = get_frontend_dist_dir();
+    let index_file = dist_dir.join("index.html");
+
     // General Router
     let app = Router::new()
         .fallback_service(
-            tower_http::services::ServeDir::new("../frontend/dist").fallback(
-                tower_http::services::ServeFile::new("../frontend/dist/index.html"),
+            tower_http::services::ServeDir::new(&dist_dir).fallback(
+                tower_http::services::ServeFile::new(&index_file),
             ),
         )
         .route("/login", get(serve_index))

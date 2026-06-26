@@ -10,10 +10,7 @@ use super::db as comm_db;
 use super::mock_connector::MockConnector;
 use super::registry::ConnectorRegistry;
 use super::types::{ChannelType, ConnectorEvent, InteractionMessage, MessageDirection};
-use crate::agent::injector::InjectorConfig;
-use crate::agent::interaction_orchestrator::Orchestrator;
 use crate::agent::llm_types::{LlmMessage, LlmProvider, LlmResponse};
-use crate::agent::worker::WorkerAgent;
 use crate::business::db as biz_db;
 use crate::business::escalation;
 use crate::business::models::{
@@ -21,10 +18,7 @@ use crate::business::models::{
 };
 use crate::business::runtime::CustomerInteractionRuntime;
 use crate::business::workflow;
-use crate::integration::external_api::ExternalApiConfig;
 use crate::memory::meta_brain::MetaBrain;
-use crate::planner::WorkerConfig;
-use crate::planner::{PlannerAgent, PlannerConfig};
 use crate::MoatResult;
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -49,18 +43,20 @@ impl LlmProvider for StubProvider {
         &'a self,
         _model: &'a str,
         _messages: Vec<LlmMessage>,
-        _tools: Option<Vec<crate::agent::interaction_orchestrator::LlmTool>>,
+        _tools: Option<Vec<crate::agent::llm_types::LlmTool>>,
         _max_tokens: usize,
         _temperature: f32,
         _response_format: Option<serde_json::Value>,
     ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
         Box::pin(async move {
-            let (text, tokens) = self
-                .response
-                .lock()
-                .expect("lock stub response")
-                .take()
-                .expect("stub response");
+            let (text, tokens) = {
+                let lock = self.response.lock().expect("lock stub response");
+                if let Some(ref val) = *lock {
+                    val.clone()
+                } else {
+                    ("<response>done</response>".to_string(), 42)
+                }
+            };
             Ok(LlmResponse {
                 content: Some(text),
                 tool_calls: None,
@@ -248,40 +244,15 @@ async fn test_runtime_processes_message_flow() {
     let db_arc = Arc::new(AsyncMutex::new(conn));
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+    let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&db_arc),
-    )
-    .unwrap();
-
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&db_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    ).unwrap());
 
     let engine = Arc::new(CustomerInteractionRuntime::new(
-        orchestrator,
+        ai_agent,
         Arc::clone(&db_arc),
         registry.clone(),
     ));

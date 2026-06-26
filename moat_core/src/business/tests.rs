@@ -30,7 +30,7 @@ impl LlmProvider for StubProvider {
         &'a self,
         _model: &'a str,
         _messages: Vec<LlmMessage>,
-        _tools: Option<Vec<crate::agent::interaction_orchestrator::LlmTool>>,
+        _tools: Option<Vec<crate::agent::llm_types::LlmTool>>,
         _max_tokens: usize,
         _temperature: f32,
         _response_format: Option<serde_json::Value>,
@@ -373,9 +373,6 @@ fn test_knowledge_retrieval_ranking() {
 
 #[tokio::test]
 async fn test_phase_9_business_operating_layer() {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
-    use crate::agent::worker::WorkerAgent;
     use crate::business::runtime::CustomerInteractionRuntime;
     use crate::communication::mock_connector::MockConnector;
     use crate::communication::types::ChannelType;
@@ -383,8 +380,6 @@ async fn test_phase_9_business_operating_layer() {
     use crate::communication::{InteractionMessage, MessageDirection};
     use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
     use crate::MoatResult;
     use std::sync::Arc;
     use std::time::Duration;
@@ -404,38 +399,13 @@ async fn test_phase_9_business_operating_layer() {
     // Create system / mock orchestrator
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+    let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_arc),
-    )
-    .unwrap();
-
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
-    let engine = CustomerInteractionRuntime::new(orchestrator, conn_arc.clone(), registry);
+        None,
+    ).unwrap());
+    let engine = CustomerInteractionRuntime::new(ai_agent, conn_arc.clone(), registry);
 
     // Let's lock DB to populate seed data
     {
@@ -925,10 +895,7 @@ fn test_thread_awaiting_authorization() {
 
 #[tokio::test]
 async fn test_end_to_end_booking_flow() {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
     use crate::agent::llm_types::{LlmMessage, LlmProvider, LlmResponse};
-    use crate::agent::worker::WorkerAgent;
     use crate::business::runtime::CustomerInteractionRuntime;
     use crate::communication::mock_connector::MockConnector;
     use crate::communication::types::ChannelType;
@@ -936,8 +903,6 @@ async fn test_end_to_end_booking_flow() {
     use crate::communication::{InteractionMessage, MessageDirection};
     use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -954,44 +919,18 @@ async fn test_end_to_end_booking_flow() {
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
 
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+    let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_arc),
-    )
-    .unwrap();
-
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    ).unwrap());
 
     let calendar = Arc::new(crate::business::calendar::MockCalendarProvider::new());
     let spreadsheet = Arc::new(crate::business::spreadsheet::MockSpreadsheetProvider::new());
     let notifier = Arc::new(crate::business::owner::MockNotificationProvider::new());
     let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
+        ai_agent,
         conn_arc.clone(),
         registry,
         calendar.clone(),
@@ -1478,274 +1417,11 @@ fn test_google_sheets_provider_operations() {
     assert_eq!(row[1], "Bob");
 }
 
-#[tokio::test]
-async fn test_whatsapp_connector_send() {
-    use crate::communication::connector::ChannelConnector;
-    use crate::communication::types::{ChannelType, InteractionMessage, MessageDirection};
-    use crate::communication::whatsapp::provider::WhatsAppConnector;
 
-    let conn = Connection::open_in_memory().unwrap();
-    db::prepare_tables(&conn).unwrap();
-    let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-    let mock_url = run_mock_google_api_server();
-
-    let connector = WhatsAppConnector::with_url(
-        conn_arc.clone(),
-        "phone_id_123".to_string(),
-        mock_url,
-        Some("valid_token".to_string()),
-    );
-
-    let msg = InteractionMessage {
-        id: "msg_123".to_string(),
-        business_id: "biz1".to_string(),
-        thread_id: "t1".to_string(),
-        customer_id: "whatsapp:+1234567890".to_string(),
-        channel: ChannelType::Whatsapp,
-        direction: MessageDirection::Outbound,
-        body: "Hello from core!".to_string(),
-        timestamp: chrono::Utc::now().timestamp(),
-    };
-
-    connector.send_message(msg).await.unwrap();
-}
-
-#[tokio::test]
-async fn test_whatsapp_webhook_server() {
-    use crate::agent::execution::journal_chain::hmac_sha256;
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
-    use crate::agent::worker::WorkerAgent;
-    use crate::business::calendar::MockCalendarProvider;
-    use crate::business::runtime::CustomerInteractionRuntime;
-    use crate::business::spreadsheet::MockSpreadsheetProvider;
-    use crate::communication::whatsapp::webhook::WhatsAppWebhookServer;
-    use crate::communication::ConnectorRegistry;
-    use crate::integration::external_api::ExternalApiConfig;
-    use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
-    use reqwest::Client;
-    use std::time::Duration;
-    use tokio::sync::RwLock as AsyncRwLock;
-
-    let db_name = format!(
-        "file:test_webhook_{}?mode=memory&cache=shared",
-        uuid::Uuid::new_v4()
-    );
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-        | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-
-    // Setup DB and prepare tables
-    let conn = Connection::open_with_flags(&db_name, flags).unwrap();
-    db::prepare_tables(&conn).unwrap();
-
-    let conn_webhook_for_provider = Connection::open_with_flags(&db_name, flags).unwrap();
-    let conn_webhook_arc = Arc::new(tokio::sync::Mutex::new(conn_webhook_for_provider));
-
-    let conn_rt_for_provider = Connection::open_with_flags(&db_name, flags).unwrap();
-    let conn_rt_arc = Arc::new(tokio::sync::Mutex::new(conn_rt_for_provider));
-
-    // Create registry and stub orchestrator
-    let registry = Arc::new(ConnectorRegistry::new());
-    let provider = Arc::new(StubProvider::new("<response>done</response>"));
-    let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
-        provider.clone(),
-    );
-
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
-        Arc::clone(&conn_rt_arc),
-    )
-    .unwrap();
-
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
-        Arc::clone(&meta_brain),
-        Arc::clone(&conn_rt_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
-
-    let cal = Arc::new(MockCalendarProvider::new());
-    let sheet = Arc::new(MockSpreadsheetProvider::new());
-    let notifier = Arc::new(crate::business::owner::MockNotificationProvider::new());
-
-    let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
-        conn_rt_arc.clone(),
-        registry,
-        cal,
-        sheet,
-        notifier,
-    ));
-
-    let verify_token = "my_secret_verify_token".to_string();
-    let client_secret = "my_app_secret".to_string();
-
-    let server = Arc::new(WhatsAppWebhookServer::new(
-        runtime.clone(),
-        conn_webhook_arc.clone(),
-        verify_token.clone(),
-        client_secret.clone(),
-    ));
-
-    // Bind to arbitrary port
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
-    let addr = format!("127.0.0.1:{}", port);
-
-    let handle = WhatsAppWebhookServer::start(server, addr.clone());
-
-    // Give server a tiny bit to spin up
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    let client = Client::new();
-
-    // 1. GET verification success
-    let res = client
-        .get(format!(
-            "http://{}/webhook?hub.mode=subscribe&hub.verify_token={}&hub.challenge=hello_world",
-            addr, verify_token
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-    assert_eq!(res.text().await.unwrap(), "hello_world");
-
-    // 2. GET verification failure
-    let res = client.get(format!("http://{}/webhook?hub.mode=subscribe&hub.verify_token=bad_token&hub.challenge=hello_world", addr))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 403);
-
-    // 3. POST message signature validation failure
-    let payload = serde_json::json!({
-        "entry": [
-            {
-                "changes": [
-                    {
-                        "value": {
-                            "messaging_product": "whatsapp",
-                            "metadata": {
-                                "display_phone_number": "16505551111",
-                                "phone_number_id": "123456789"
-                            },
-                            "contacts": [
-                                {
-                                    "profile": {
-                                        "name": "Bob Test"
-                                    },
-                                    "wa_id": "1234567890"
-                                }
-                            ],
-                            "messages": [
-                                {
-                                    "from": "1234567890",
-                                    "id": "wa_msg_1",
-                                    "timestamp": "1672531199",
-                                    "text": {
-                                        "body": "Hello world"
-                                    },
-                                    "type": "text"
-                                }
-                            ]
-                        },
-                        "field": "messages"
-                    }
-                ]
-            }
-        ]
-    });
-
-    let payload_bytes = serde_json::to_vec(&payload).unwrap();
-    let res = client
-        .post(format!("http://{}/webhook", addr))
-        .header(
-            "x-hub-signature-256",
-            "sha256=invalid_signature_hex_value_12345678",
-        )
-        .body(payload_bytes.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 401);
-
-    // 4. POST message success
-    let signature = hmac_sha256(client_secret.as_bytes(), &payload_bytes);
-    let signature_hex: String = signature.iter().map(|b| format!("{:02x}", b)).collect();
-    let signature_header = format!("sha256={}", signature_hex);
-
-    let res = client
-        .post(format!("http://{}/webhook", addr))
-        .header("x-hub-signature-256", signature_header.clone())
-        .body(payload_bytes.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-
-    // Verify customer automatically created and metric incremented
-    {
-        let contact =
-            db::get_contact_by_identity(&conn, "whatsapp", "whatsapp:+1234567890").unwrap();
-        assert!(contact.is_some());
-        let contact = contact.unwrap();
-        assert_eq!(contact.name.unwrap(), "Bob Test");
-        assert_eq!(contact.phone.unwrap(), "+1234567890");
-
-        let metric = db::get_kpi_metric(&conn, "messages_received").unwrap();
-        assert_eq!(metric, 1);
-    }
-
-    // 5. POST replay check (sending same message ID should be ignored, return 200 but not insert/duplicate)
-    let res = client
-        .post(format!("http://{}/webhook", addr))
-        .header("x-hub-signature-256", signature_header)
-        .body(payload_bytes)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-
-    // Verify metric wasn't incremented again
-    {
-        let metric = db::get_kpi_metric(&conn, "messages_received").unwrap();
-        assert_eq!(metric, 1); // remains 1, proving replay protection worked!
-    }
-
-    // Clean up server thread
-    handle.abort();
-}
 
 #[tokio::test]
 async fn test_owner_operations_and_notifications() {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
-    use crate::agent::worker::WorkerAgent;
+    use crate::agent::ai_agent::AIAgent;
     use crate::business::calendar::MockCalendarProvider;
     use crate::business::owner::MockNotification;
     use crate::business::owner::MockNotificationProvider;
@@ -1754,10 +1430,7 @@ async fn test_owner_operations_and_notifications() {
     use crate::business::runtime::CustomerInteractionRuntime;
     use crate::business::spreadsheet::MockSpreadsheetProvider;
     use crate::communication::ConnectorRegistry;
-    use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
     use std::time::Duration;
     use tokio::sync::RwLock as AsyncRwLock;
 
@@ -1780,43 +1453,20 @@ async fn test_owner_operations_and_notifications() {
     let registry = Arc::new(ConnectorRegistry::new());
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+
+    let ai_agent = Arc::new(AIAgent::new(
         provider.clone(),
-    );
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_rt_arc),
-    )
-    .unwrap();
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_rt_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    ).unwrap());
 
     let cal = Arc::new(MockCalendarProvider::new());
     let sheet = Arc::new(MockSpreadsheetProvider::new());
     let notifier = Arc::new(MockNotificationProvider::new());
 
     let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
+        ai_agent,
         conn_rt_arc.clone(),
         registry,
         cal,
@@ -1979,9 +1629,6 @@ async fn test_owner_operations_and_notifications() {
 
 #[tokio::test]
 async fn test_operator_control_plane_flows() {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
-    use crate::agent::worker::WorkerAgent;
     use crate::business::calendar::MockCalendarProvider;
     use crate::business::models::{
         OpportunityStatus, PipelineStage, ThreadControlMode, ThreadStatus,
@@ -1994,8 +1641,6 @@ async fn test_operator_control_plane_flows() {
     use crate::communication::ConnectorRegistry;
     use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
     use std::time::Duration;
     use tokio::sync::RwLock as AsyncRwLock;
 
@@ -2016,43 +1661,19 @@ async fn test_operator_control_plane_flows() {
     let registry = Arc::new(ConnectorRegistry::new());
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+    let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_rt_arc),
-    )
-    .unwrap();
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_rt_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    ).unwrap());
 
     let cal = Arc::new(MockCalendarProvider::new());
     let sheet = Arc::new(MockSpreadsheetProvider::new());
     let notifier = Arc::new(MockNotificationProvider::new());
 
     let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
+        ai_agent,
         conn_rt_arc.clone(),
         registry,
         cal,
@@ -2246,9 +1867,6 @@ async fn test_operator_control_plane_flows() {
 
 #[tokio::test]
 async fn test_reliability_features() {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
-    use crate::agent::worker::WorkerAgent;
     use crate::business::calendar::MockCalendarProvider;
     use crate::business::owner::MockNotificationProvider;
     use crate::business::runtime::CustomerInteractionRuntime;
@@ -2256,8 +1874,6 @@ async fn test_reliability_features() {
     use crate::communication::ConnectorRegistry;
     use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::WorkerConfig;
-    use crate::planner::{PlannerAgent, PlannerConfig};
     use std::time::Duration;
     use tokio::sync::RwLock as AsyncRwLock;
 
@@ -2278,43 +1894,19 @@ async fn test_reliability_features() {
     let registry = Arc::new(ConnectorRegistry::new());
     let provider = Arc::new(StubProvider::new("<response>done</response>"));
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: "stub".into(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 128,
-        },
+    let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: "stub".into(),
-            command_timeout: Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_rt_arc),
-    )
-    .unwrap();
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_rt_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    ).unwrap());
 
     let cal = Arc::new(MockCalendarProvider::new());
     let sheet = Arc::new(MockSpreadsheetProvider::new());
     let notifier = Arc::new(MockNotificationProvider::new());
 
     let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
+        ai_agent,
         conn_rt_arc.clone(),
         registry,
         cal,

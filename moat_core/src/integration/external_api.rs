@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::agent::interaction_orchestrator::{
+use crate::agent::llm_types::{
     BoxFuture, LlmMessage, LlmProvider, LlmResponse, LlmTool, LlmToolCall,
 };
 use crate::config::{
@@ -806,7 +806,7 @@ impl LlmProvider for GoogleExternalClient {
         max_tokens: usize,
         temperature: f32,
         response_format: Option<serde_json::Value>,
-    ) -> crate::agent::interaction_orchestrator::BoxFuture<'a, MoatResult<LlmResponse>> {
+    ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
         let api_key = self.api_key.clone();
         let client = self.client.clone();
         let model = model.to_string();
@@ -949,7 +949,7 @@ impl LlmProvider for DeepSeekMultiClient {
         max_tokens: usize,
         temperature: f32,
         response_format: Option<serde_json::Value>,
-    ) -> crate::agent::interaction_orchestrator::BoxFuture<'a, MoatResult<LlmResponse>> {
+    ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
         Box::pin(async move {
             let mut errors = Vec::new();
             let mut ordered_credentials = self.credentials.clone();
@@ -1009,7 +1009,7 @@ impl LlmProvider for DeepSeekExternalClient {
         max_tokens: usize,
         temperature: f32,
         response_format: Option<serde_json::Value>,
-    ) -> crate::agent::interaction_orchestrator::BoxFuture<'a, MoatResult<LlmResponse>> {
+    ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
         let api_key = self.api_key.clone();
         let client = self.client.clone();
         let model = model.to_string();

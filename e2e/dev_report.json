@@ -1,0 +1,16 @@
+{
+  "finalUrl": "http://localhost:3000/login",
+  "consoleLogs": [
+    "[debug] [vite] connecting...",
+    "[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "[debug] [vite] connected.",
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "[debug] [vite] connecting...",
+    "[debug] [vite] connected.",
+    "[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+  ],
+  "errors": [
+    "Request failed: GET http://localhost:3000/api/platform/packages - net::ERR_ABORTED"
+  ],
+  "bodyHtml": "<!DOCTYPE html><html lang=\"en\" class=\"dark\"><head>\n    <script type=\"module\">import { injectIntoGlobalHook } from \"/@react-refresh\";\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () => {};\nwindow.$RefreshSig$ = () => (type) => type;</script>\n\n    <script type=\"module\" src=\"/@vite/client\"></script>\n\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n    <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin=\"\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap\" rel=\"stylesheet\">\n    <title>MoatAgeex - Production Platform</title>\n  <style type=\"text/css\" data-vite-dev-id=\"/Users/harshavardhanbk/Desktop/MoatAgeex/frontend/src/index.css\">/*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */\n@layer properties;\n@layer theme, base, c"
+}

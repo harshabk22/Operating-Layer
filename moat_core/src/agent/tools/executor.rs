@@ -534,7 +534,7 @@ impl ToolExecutor {
             unknown => {
                 let registry = crate::agent::tools::global_registry().read().unwrap();
                 if let Some(tool) = registry.get(unknown) {
-                    let intent = crate::agent::interaction_orchestrator::ActionIntent {
+                    let intent = crate::agent::types::ActionIntent {
                         thought: None,
                         action: unknown.to_string(),
                         target: args.get("target").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -542,8 +542,8 @@ impl ToolExecutor {
                         reason: None,
                     };
                     match tool.execute(&intent).await {
-                        Ok(crate::agent::interaction_orchestrator::TaskStatus::Success { stdout }) => Ok(stdout),
-                        Ok(crate::agent::interaction_orchestrator::TaskStatus::Failed { stderr, .. }) => Err(anyhow::anyhow!("Dynamic tool execution failed: {}", stderr)),
+                        Ok(crate::agent::types::TaskStatus::Success { stdout }) => Ok(stdout),
+                        Ok(crate::agent::types::TaskStatus::Failed { stderr, .. }) => Err(anyhow::anyhow!("Dynamic tool execution failed: {}", stderr)),
                         Err(e) => Err(anyhow::anyhow!("Dynamic tool error: {:?}", e)),
                         _ => Err(anyhow::anyhow!("Dynamic tool execution did not succeed")),
                     }

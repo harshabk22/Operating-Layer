@@ -212,6 +212,9 @@ pub fn prepare_tables(conn: &Connection) -> MoatResult<()> {
             updated_at INTEGER NOT NULL
         );
 
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_instances_biz_provider 
+        ON connection_instances(business_id, provider_id);
+
 
         CREATE TABLE IF NOT EXISTS processed_whatsapp_events (
             event_id TEXT PRIMARY KEY,
@@ -349,9 +352,20 @@ pub fn prepare_tables(conn: &Connection) -> MoatResult<()> {
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS business_cron_schedules (
+            id TEXT PRIMARY KEY,
+            cron_expression TEXT NOT NULL,
+            objective TEXT NOT NULL,
+            allowed_tools TEXT,
+            last_run_at INTEGER,
+            next_run_at INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1
         );",
     )
     .map_err(MoatError::Database)?;
+
+    crate::memory::prepare_tables(conn)?;
 
     Ok(())
 }
@@ -1999,9 +2013,11 @@ pub fn delete_calendar_credentials(
     Ok(())
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
 pub struct GoogleWorkspaceConfig {
     pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub redirect_uri: Option<String>,
     pub selected_spreadsheet_id: Option<String>,
 }
 

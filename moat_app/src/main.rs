@@ -1,14 +1,9 @@
-use moat_core::agent::injector::InjectorConfig;
-use moat_core::agent::interaction_orchestrator::Orchestrator;
 use moat_core::agent::llm_types::{LlmMessage, LlmProvider, LlmResponse};
-use moat_core::agent::worker::WorkerAgent;
 use moat_core::business::runtime::CustomerInteractionRuntime;
 use moat_core::communication::ConnectorRegistry;
-use moat_core::integration::external_api::{ExternalApiConfig, ProviderFactory};
+use moat_core::integration::external_api::ProviderFactory;
 use moat_core::memory::meta_brain::MetaBrain;
-use moat_core::planner::{PlannerAgent, PlannerConfig, WorkerConfig};
 use moat_core::MoatResult;
-// Removed System import
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -24,7 +19,7 @@ impl LlmProvider for LocalStubProvider {
         &'a self,
         _model: &'a str,
         _messages: Vec<LlmMessage>,
-        _tools: Option<Vec<moat_core::agent::interaction_orchestrator::LlmTool>>,
+        _tools: Option<Vec<moat_core::agent::llm_types::LlmTool>>,
         _max_tokens: usize,
         _temperature: f32,
         _response_format: Option<serde_json::Value>,
@@ -43,7 +38,9 @@ impl LlmProvider for LocalStubProvider {
 
 async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
     let cwd = std::env::current_dir()?;
-    let base_dir = if cwd.ends_with("moat_core") {
+    let base_dir = if cwd.ends_with("moat_app") {
+        cwd.parent().unwrap().join("moat_core")
+    } else if cwd.ends_with("moat_core") {
         cwd
     } else {
         cwd.join("moat_core")
@@ -71,6 +68,7 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
 
     let conn = Connection::open(&db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     // Drop legacy v2 tables if they exist
     let _ = conn.execute("DROP TABLE IF EXISTS v2_events", []);
@@ -82,33 +80,8 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
     let conn_arc = Arc::new(AsyncMutex::new(conn));
     let registry = Arc::new(ConnectorRegistry::new());
 
-    let whatsapp_business = Arc::new(moat_core::communication::whatsapp::WhatsAppConnector::new(
-        Arc::new(std::sync::Mutex::new(rusqlite::Connection::open(&db_path)?)),
-        std::env::var("WHATSAPP_PHONE_NUMBER_ID").unwrap_or_else(|_| "default".to_string()),
-    ));
-
-    let whatsapp_baileys = Arc::new(
-        moat_core::communication::whatsapp_baileys::WhatsAppBaileysConnector::new(
-            Arc::new(std::sync::Mutex::new(rusqlite::Connection::open(&db_path)?)),
-            "default_business".to_string(),
-        ),
-    );
-
-    registry
-        .register("whatsapp_business", whatsapp_business.clone())
-        .await;
-    registry
-        .register("whatsapp_baileys", whatsapp_baileys.clone())
-        .await;
-
-    let multiplexer = Arc::new(
-        moat_core::communication::whatsapp_baileys::WhatsAppMultiplexer::new(
-            whatsapp_business,
-            whatsapp_baileys.clone(),
-            Arc::new(std::sync::Mutex::new(rusqlite::Connection::open(&db_path)?)),
-        ),
-    );
-    registry.register("whatsapp", multiplexer).await;
+    // Register Dynamic Packages BEFORE initializing them!
+    moat_core::package::register_dynamic_package(Arc::new(whatsapp_v1::WhatsAppPackage::new()));
 
     let meta_brain = Arc::new(AsyncRwLock::new(MetaBrain::new()));
 
@@ -120,7 +93,7 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
         moat_core::integration::external_api::ExternalProviderFactory::new(ext_config);
     let provider_name = provider_factory.get_default_provider();
 
-    let (provider, model): (Arc<dyn moat_core::agent::llm_types::LlmProvider>, String) =
+    let (provider, _model): (Arc<dyn moat_core::agent::llm_types::LlmProvider>, String) =
         match provider_factory.provider_for(&provider_name) {
             Ok(p) => {
                 let default_model = if provider_name == "google" {
@@ -141,39 +114,17 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
             }
         };
 
-    let planner = PlannerAgent::new(
-        PlannerConfig {
-            model: model.clone(),
-            max_subtasks: 5,
-            temperature: 0.0,
-            max_tokens: 1024,
-        },
+    let ai_agent = Arc::new(moat_core::agent::ai_agent::AIAgent::new(
         provider.clone(),
-    );
-
-    let worker = WorkerAgent::new(
-        WorkerConfig {
-            model: model.clone(),
-            command_timeout: std::time::Duration::from_secs(5),
-            allow_high_risk: true,
-            external_apis: ExternalApiConfig::default(),
-        },
-        Arc::clone(&meta_brain),
         Arc::clone(&conn_arc),
-    )?;
-
-    let orchestrator = Arc::new(Orchestrator::new(
-        planner,
-        worker,
         Arc::clone(&meta_brain),
-        Arc::clone(&conn_arc),
-        InjectorConfig {
-            top_k_memories: 10,
-            max_memory_chars: 1000,
-        },
-    ));
+        None,
+    )?);
 
-    let db_conn = Arc::new(std::sync::Mutex::new(rusqlite::Connection::open(&db_path)?));
+    let db_conn_raw = rusqlite::Connection::open(&db_path)?;
+    db_conn_raw.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+    db_conn_raw.busy_timeout(std::time::Duration::from_secs(5))?;
+    let db_conn = Arc::new(std::sync::Mutex::new(db_conn_raw));
     let cal: Arc<dyn moat_core::business::calendar::CalendarProvider> =
         Arc::new(moat_core::business::calendar::GoogleCalendarProvider::new(
             db_conn.clone(),
@@ -189,7 +140,7 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
     let notifier = Arc::new(moat_core::business::owner::ConsoleNotificationProvider::new());
 
     let runtime = Arc::new(CustomerInteractionRuntime::with_providers(
-        orchestrator,
+        ai_agent,
         conn_arc,
         registry,
         cal,
@@ -197,18 +148,17 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
         notifier,
     ));
 
-    whatsapp_baileys.set_runtime(Arc::downgrade(&runtime));
-    if let Err(e) = whatsapp_baileys.start().await {
-        eprintln!(
-            "[Bootstrap] Failed to start WhatsApp Baileys connector: {:?}",
-            e
-        );
-    }
+    // Initialize all registered dynamic packages!
+    moat_core::package::initialize_dynamic_packages(runtime.clone()).await?;
+
+    // Start background workers
+    runtime.start_background_workers();
 
     // Bootload installed packages from business.db
     {
         println!("[Bootstrap] Bootloading installed packages from business.db...");
         let conn = rusqlite::Connection::open(&db_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let mut stmt = conn.prepare("SELECT id FROM projections WHERE name = 'PackageInstalled'")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for pkg_id in rows.flatten() {
@@ -229,7 +179,7 @@ async fn setup_runtime() -> anyhow::Result<Arc<CustomerInteractionRuntime>> {
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     println!("╔══════════════════════════════════════════╗");
-    println!("║    Moat Core Runtime Daemon              ║");
+    println!("║    Moat App Daemon                       ║");
     println!("╚══════════════════════════════════════════╝");
     println!("Mode: Production Runtime");
     println!();
@@ -248,25 +198,15 @@ async fn main() -> anyhow::Result<()> {
         bound_port
     );
 
-    // Start background workers and WhatsApp Webhook Server
-    let webhook_port = std::env::var("WHATSAPP_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(8081);
-    let _webhook_handle = runtime
-        .clone()
-        .start_webhook(&format!("0.0.0.0:{}", webhook_port));
-    println!(
-        "[WhatsApp API] Webhook server running in the background on port {}",
-        webhook_port
-    );
-
     println!("── System ready ──────────────────────────────");
     println!("Running background services. Press Ctrl+C to exit.");
 
     // Suspend indefinitely
     tokio::signal::ctrl_c().await?;
     println!("Shutting down.");
+
+    // Call shutdown on registered packages
+    moat_core::package::shutdown_dynamic_packages().await;
 
     Ok(())
 }

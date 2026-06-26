@@ -123,3 +123,68 @@ pub trait LlmProvider: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 }
+
+use std::sync::Arc;
+use std::time::Duration;
+
+fn is_transient_error(err: &MoatError) -> bool {
+    let err_str = err.to_string().to_lowercase();
+    err_str.contains("429") 
+        || err_str.contains("rate limit") 
+        || err_str.contains("timeout") 
+        || err_str.contains("503") 
+        || err_str.contains("502") 
+        || err_str.contains("500")
+}
+
+pub struct FallbackLlmProvider {
+    pub primary: Arc<dyn LlmProvider>,
+    pub fallback: Arc<dyn LlmProvider>,
+    pub fallback_model: String,
+}
+
+impl FallbackLlmProvider {
+    pub fn new(primary: Arc<dyn LlmProvider>, fallback: Arc<dyn LlmProvider>, fallback_model: String) -> Self {
+        Self { primary, fallback, fallback_model }
+    }
+}
+
+impl LlmProvider for FallbackLlmProvider {
+    fn chat_complete<'a>(
+        &'a self,
+        model: &'a str,
+        messages: Vec<LlmMessage>,
+        tools: Option<Vec<LlmTool>>,
+        max_tokens: usize,
+        temperature: f32,
+        response_format: Option<serde_json::Value>,
+    ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
+        Box::pin(async move {
+            let mut _last_err = None;
+            for attempt in 0..3 {
+                match self.primary.chat_complete(model, messages.clone(), tools.clone(), max_tokens, temperature, response_format.clone()).await {
+                    Ok(resp) => return Ok(resp),
+                    Err(err) => {
+                        if !is_transient_error(&err) {
+                            return Err(err);
+                        }
+                        _last_err = Some(err);
+                        tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+                    }
+                }
+            }
+            self.fallback.chat_complete(&self.fallback_model, messages, tools, max_tokens, temperature, response_format).await
+        })
+    }
+
+    fn check_health<'a>(&'a self) -> BoxFuture<'a, MoatResult<()>> {
+        Box::pin(async move {
+            if self.primary.check_health().await.is_ok() {
+                Ok(())
+            } else {
+                self.fallback.check_health().await
+            }
+        })
+    }
+}
+

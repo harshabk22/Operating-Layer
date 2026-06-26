@@ -253,3 +253,50 @@ impl PackageInstaller {
         Ok(())
     }
 }
+
+use axum::Router;
+use std::sync::OnceLock;
+use crate::api::server::ApiState;
+use crate::business::runtime::CustomerInteractionRuntime;
+use crate::MoatResult;
+
+#[async_trait::async_trait]
+pub trait DynamicPackage: Send + Sync {
+    fn id(&self) -> &str;
+    async fn initialize(&self, runtime: Arc<CustomerInteractionRuntime>) -> MoatResult<()>;
+    fn register_routes(&self, router: Router<ApiState>) -> Router<ApiState> {
+        router
+    }
+    async fn shutdown(&self) -> MoatResult<()> {
+        Ok(())
+    }
+}
+
+pub static DYNAMIC_PACKAGE_REGISTRY: OnceLock<parking_lot::RwLock<HashMap<String, Arc<dyn DynamicPackage>>>> = OnceLock::new();
+
+pub fn register_dynamic_package(package: Arc<dyn DynamicPackage>) {
+    let registry = DYNAMIC_PACKAGE_REGISTRY.get_or_init(|| parking_lot::RwLock::new(HashMap::new()));
+    let mut map = registry.write();
+    map.insert(package.id().to_string(), package);
+}
+
+pub async fn initialize_dynamic_packages(runtime: Arc<CustomerInteractionRuntime>) -> MoatResult<()> {
+    if let Some(registry_lock) = DYNAMIC_PACKAGE_REGISTRY.get() {
+        let registry = registry_lock.read();
+        for (id, package) in registry.iter() {
+            println!("[DynamicPackage] Initializing package: {}", id);
+            package.initialize(runtime.clone()).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn shutdown_dynamic_packages() {
+    if let Some(registry_lock) = DYNAMIC_PACKAGE_REGISTRY.get() {
+        let mut registry = registry_lock.write();
+        for (id, package) in registry.drain() {
+            println!("[DynamicPackage] Shutting down package: {}", id);
+            let _ = package.shutdown().await;
+        }
+    }
+}

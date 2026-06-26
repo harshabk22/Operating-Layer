@@ -1,0 +1,10 @@
+{
+  "finalUrl": "http://localhost:8080/login",
+  "consoleLogs": [
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "errors": [
+    "Request failed: GET http://localhost:8080/api/platform/packages - net::ERR_ABORTED"
+  ],
+  "bodyHtml": "<!DOCTYPE html><html lang=\"en\" class=\"dark\"><head>\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n    <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin=\"\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap\" rel=\"stylesheet\">\n    <title>MoatAgeex - Production Platform</title>\n    <script type=\"module\" crossorigin=\"\" src=\"/assets/index-Mg7_bXDX.js\"></script>\n    <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/index-kUUIfZaL.css\">\n  </head>\n  <body>\n    <div id=\"root\"><div class=\"min-h-screen flex items-center justify-center bg-background p-4\"><div class=\"rounded-xl border bg-card text-card-foreground shadow w-[400px]\"><div class=\"flex flex-col space-y-1.5 p-6\"><h3 class=\"tracking-tight text-2xl font-bold text-center\">MoatAgeex Platfo"
+}

@@ -1,16 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use crate::agent::injector::InjectorConfig;
-    use crate::agent::interaction_orchestrator::Orchestrator;
     use crate::agent::llm_types::{LlmMessage, LlmProvider, LlmResponse};
-    use crate::agent::worker::WorkerAgent;
     use crate::api::server::start_api_server;
     use crate::business::db;
     use crate::business::runtime::CustomerInteractionRuntime;
     use crate::communication::ConnectorRegistry;
-    use crate::integration::external_api::ExternalApiConfig;
     use crate::memory::meta_brain::MetaBrain;
-    use crate::planner::{PlannerAgent, PlannerConfig, WorkerConfig};
     use crate::MoatResult;
     use reqwest::{Client, StatusCode};
     use rusqlite::Connection;
@@ -29,7 +24,7 @@ mod tests {
             &'a self,
             _model: &'a str,
             _messages: Vec<LlmMessage>,
-            _tools: Option<Vec<crate::agent::interaction_orchestrator::LlmTool>>,
+            _tools: Option<Vec<crate::agent::llm_types::LlmTool>>,
             _max_tokens: usize,
             _temperature: f32,
             _response_format: Option<serde_json::Value>,
@@ -59,45 +54,19 @@ mod tests {
         let provider = Arc::new(LocalStubProvider {
             response: "<response>done</response>".to_string(),
         });
-        let planner = PlannerAgent::new(
-            PlannerConfig {
-                model: "stub".into(),
-                max_subtasks: 5,
-                temperature: 0.0,
-                max_tokens: 128,
-            },
+        let ai_agent = Arc::new(crate::agent::ai_agent::AIAgent::new(
             provider.clone(),
-        );
-
-        let worker = WorkerAgent::new(
-            WorkerConfig {
-                model: "stub".into(),
-                command_timeout: std::time::Duration::from_secs(5),
-                allow_high_risk: true,
-                external_apis: ExternalApiConfig::default(),
-            },
-            Arc::clone(&meta_brain),
             Arc::clone(&conn_arc),
-        )
-        .unwrap();
-
-        let orchestrator = Arc::new(Orchestrator::new(
-            planner,
-            worker,
             Arc::clone(&meta_brain),
-            Arc::clone(&conn_arc),
-            InjectorConfig {
-                top_k_memories: 10,
-                max_memory_chars: 1000,
-            },
-        ));
+            None,
+        ).unwrap());
 
         let cal = Arc::new(crate::business::calendar::MockCalendarProvider::new());
         let sheet = Arc::new(crate::business::spreadsheet::MockSpreadsheetProvider::new());
         let notifier = Arc::new(crate::business::owner::MockNotificationProvider::new());
 
         Arc::new(CustomerInteractionRuntime::with_providers(
-            orchestrator,
+            ai_agent,
             conn_arc,
             registry,
             cal,

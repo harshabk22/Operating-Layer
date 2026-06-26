@@ -242,6 +242,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c344b0690c1ad1c7176fe18eb173e0c927008fdaaa256e40dfd43ddd149c0843"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -929,6 +938,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "moat_app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "dotenvy",
+ "moat_core",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "whatsapp-v1",
+]
+
+[[package]]
 name = "moat_core"
 version = "0.1.0"
 dependencies = [
@@ -939,6 +962,7 @@ dependencies = [
  "bincode",
  "bit-vec 0.9.1",
  "chrono",
+ "croner",
  "dashmap",
  "dirs",
  "dotenvy",
@@ -2201,6 +2225,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "whatsapp-v1"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "dirs",
+ "moat_core",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

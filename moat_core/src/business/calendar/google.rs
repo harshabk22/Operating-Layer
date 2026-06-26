@@ -79,14 +79,22 @@ impl GoogleCalendarProvider {
     }
 
     async fn refresh_token_flow(&self, refresh_token: &str) -> Result<String> {
-        let client_id = {
+        let (client_id, client_secret) = {
             let conn = self.db.lock().unwrap();
-            crate::business::db::read_google_config(&conn, &self.business_id)?
-                .client_id
-                .ok_or_else(|| anyhow!("Google client_id not found in configuration"))?
+            let config = crate::business::db::read_google_config(&conn, &self.business_id)?;
+            let cid = config.client_id
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default());
+            let csec = config.client_secret
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default());
+            (cid, csec)
         };
 
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        if client_id.is_empty() {
+            return Err(anyhow!("Google client_id not found in configuration or environment"));
+        }
+
         let params = [
             ("client_id", client_id.as_str()),
             ("client_secret", client_secret.as_str()),

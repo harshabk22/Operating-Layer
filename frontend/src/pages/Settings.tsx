@@ -1,9 +1,36 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/use-toast';
 
 export default function Settings() {
-  const [theme, setTheme] = useState('dark');
+  const { toast } = useToast();
+  const [theme, setTheme] = useState(() => {
+    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  });
   const [tenantName, setTenantName] = useState('Moat Default Tenant');
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      // Persist settings via API if available, otherwise save locally
+      localStorage.setItem('moat_theme', theme);
+      localStorage.setItem('moat_tenant_name', tenantName);
+      toast({ title: 'Success', description: 'Settings saved successfully.' });
+    } catch (err) {
+      toast({ title: 'Error', description: 'Failed to save settings.', variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-xl">
@@ -31,14 +58,14 @@ export default function Settings() {
           >
             <option value="light">Light Mode</option>
             <option value="dark">Dark Mode (Standard)</option>
-            <option value="glass">Glassmorphic Accent</option>
           </select>
         </div>
 
-        <Button onClick={() => alert('Settings saved successfully.')}>
-          Save Configuration
+        <Button onClick={handleSave} disabled={isSaving}>
+          {isSaving ? 'Saving...' : 'Save Configuration'}
         </Button>
       </div>
     </div>
   );
 }
+

@@ -1,7 +1,7 @@
 use super::models::{OpportunityStatus, PipelineStage, ThreadControlMode};
 use super::{identity, knowledge, workflow};
-use crate::agent::interaction_orchestrator::Orchestrator;
-use crate::agent::interaction_orchestrator::TaskStatus;
+use crate::agent::ai_agent::AIAgent;
+use crate::agent::types::TaskStatus;
 use crate::communication::types::MessageDirection;
 use crate::communication::{ConnectorEvent, ConnectorRegistry, InteractionMessage};
 use crate::MoatResult;
@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 pub struct CustomerInteractionRuntime {
-    pub orchestrator: Arc<Orchestrator>,
+    pub ai_agent: Arc<AIAgent>,
     pub db: Arc<Mutex<Connection>>,
     pub registry: Arc<ConnectorRegistry>,
     pub calendar: Arc<dyn crate::business::calendar::CalendarProvider>,
@@ -21,12 +21,12 @@ pub struct CustomerInteractionRuntime {
 impl CustomerInteractionRuntime {
     #[cfg(test)]
     pub fn new(
-        orchestrator: Arc<Orchestrator>,
+        ai_agent: Arc<AIAgent>,
         db: Arc<Mutex<Connection>>,
         registry: Arc<ConnectorRegistry>,
     ) -> Self {
         Self {
-            orchestrator,
+            ai_agent,
             db,
             registry,
             calendar: Arc::new(crate::business::calendar::MockCalendarProvider::new())
@@ -41,7 +41,7 @@ impl CustomerInteractionRuntime {
 
 
     pub fn with_providers(
-        orchestrator: Arc<Orchestrator>,
+        ai_agent: Arc<AIAgent>,
         db: Arc<Mutex<Connection>>,
         registry: Arc<ConnectorRegistry>,
         calendar: Arc<dyn crate::business::calendar::CalendarProvider>,
@@ -49,7 +49,7 @@ impl CustomerInteractionRuntime {
         notifier: Arc<dyn crate::business::owner::NotificationProvider>,
     ) -> Self {
         Self {
-            orchestrator,
+            ai_agent,
             db,
             registry,
             calendar,
@@ -120,7 +120,7 @@ impl CustomerInteractionRuntime {
         &self,
         message: InteractionMessage,
     ) -> MoatResult<InteractionMessage> {
-        let conn = self.db.lock().await;
+        let mut conn = self.db.lock().await;
 
         // 1. Detect Inbound Intent
         let intent = self.detect_intent(&message.body);
@@ -144,9 +144,11 @@ impl CustomerInteractionRuntime {
             &msg_received_event,
             &message.channel.to_string(),
         )?;
+        drop(conn);
         self.registry
             .dispatch_event(msg_received_event, &message.channel.to_string())
             .await?;
+        conn = self.db.lock().await;
 
         // Dispatch ThreadOpened if it's new
         if is_new_thread {
@@ -161,9 +163,11 @@ impl CustomerInteractionRuntime {
                 &thread_opened_event,
                 &message.channel.to_string(),
             )?;
+            drop(conn);
             self.registry
                 .dispatch_event(thread_opened_event, &message.channel.to_string())
                 .await?;
+            conn = self.db.lock().await;
         }
 
         // 5. Track Thread Objective
@@ -364,9 +368,11 @@ impl CustomerInteractionRuntime {
                     &escalation_event,
                     &message.channel.to_string(),
                 )?;
+                drop(conn);
                 self.registry
                     .dispatch_event(escalation_event, &message.channel.to_string())
                     .await?;
+                conn = self.db.lock().await;
 
                 response_text =
                     "Your request has been escalated to an operator. We will be in touch shortly."
@@ -435,9 +441,11 @@ impl CustomerInteractionRuntime {
                             &auth_event,
                             &message.channel.to_string(),
                         )?;
+                        drop(conn);
                         self.registry
                             .dispatch_event(auth_event, &message.channel.to_string())
                             .await?;
+                        conn = self.db.lock().await;
 
                         response_text = "A booking proposal has been submitted and is pending operator approval. We will notify you once confirmed.".to_string();
                     } else {
@@ -487,9 +495,11 @@ impl CustomerInteractionRuntime {
                     &close_event,
                     &message.channel.to_string(),
                 )?;
+                drop(conn);
                 self.registry
                     .dispatch_event(close_event, &message.channel.to_string())
                     .await?;
+                conn = self.db.lock().await;
 
                 response_text =
                     "Thank you. This conversation is now closed. Have a great day!".to_string();
@@ -509,22 +519,27 @@ impl CustomerInteractionRuntime {
                 contact.id, thread.id, message.channel, message.body, knowledge_context
             );
 
-            let (results, _) = self
-                .orchestrator
-                .run_react(
-                    &prompt_input,
-                    "",
-                    crate::memory::meta_brain::SYSTEM_ROOT_ID,
-                    None,
-                )
-                .await?;
+            let mut state = crate::agent::ai_agent::AgentExecutionState {
+                session_id: uuid::Uuid::parse_str(&thread.id).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                objective: prompt_input,
+                context_trace: Vec::new(),
+                turns: 0,
+                allowed_tools: Vec::new(),
+                scope_stack: Vec::new(),
+                total_tokens: 0,
+                history_tokens: Vec::new(),
+            };
+
+            let outcome = self.ai_agent.run_agent_loop(&mut state, None).await?;
 
             response_text =
                 "Thank you for your message. An operator will be with you shortly.".to_string();
-            for res in &results {
-                if res.action == "done" {
-                    if let TaskStatus::Success { stdout } = &res.status {
-                        response_text = stdout.clone();
+            if let crate::agent::types::ReactOutcome::Completed { results, .. } = outcome {
+                for res in &results {
+                    if res.action == "done" {
+                        if let TaskStatus::Success { stdout } = &res.status {
+                            response_text = stdout.clone();
+                        }
                     }
                 }
             }
@@ -754,23 +769,11 @@ impl CustomerInteractionRuntime {
         vec![
             crate::business::jobs::worker::start_job_worker(self.clone()),
             crate::business::outbox::start_outbox_worker(self.clone()),
+            crate::business::jobs::cron_worker::start_cron_scheduler(self.clone()),
         ]
     }
 
-    pub fn start_webhook(self: Arc<Self>, addr: &str) -> tokio::task::JoinHandle<()> {
-        self.start_background_workers();
-        let verify_token = std::env::var("WHATSAPP_VERIFY_TOKEN")
-            .unwrap_or_else(|_| "default_verify_token".to_string());
-        let client_secret = std::env::var("WHATSAPP_CLIENT_SECRET")
-            .unwrap_or_else(|_| "default_client_secret".to_string());
-        let server = Arc::new(crate::communication::whatsapp::WhatsAppWebhookServer::new(
-            self.clone(),
-            self.db.clone(),
-            verify_token,
-            client_secret,
-        ));
-        server.start(addr.to_string())
-    }
+
 }
 
 fn get_booking_details(msgs: &[crate::business::models::MessageRecord]) -> (Option<String>, Option<String>, Option<String>, bool) {

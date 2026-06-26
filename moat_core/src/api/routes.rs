@@ -496,54 +496,7 @@ pub async fn analytics_overview_handler(
     }))
 }
 
-pub async fn whatsapp_qr_handler(
-    State(state): State<ApiState>,
-) -> Result<impl IntoResponse, StatusCode> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    if let Some(connector) = state.runtime.registry.lookup("whatsapp_baileys").await {
-        if let Ok(Some(qr_str)) = connector.get_qr_code().await {
-            if let Some(pos) = qr_str.find("base64,") {
-                let b64_part = &qr_str[pos + 7..];
-                if let Ok(bytes) = STANDARD.decode(b64_part) {
-                    let mut headers = axum::http::HeaderMap::new();
-                    headers.insert(
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::header::HeaderValue::from_static("image/png"),
-                    );
-                    return Ok((headers, bytes));
-                }
-            }
-        }
-    }
-
-    Err(StatusCode::NOT_FOUND)
-}
-
-pub async fn whatsapp_status_handler(
-    State(state): State<ApiState>,
-) -> Result<impl IntoResponse, StatusCode> {
-    if let Some(connector) = state.runtime.registry.lookup("whatsapp_baileys").await {
-        let healthy = connector.health_check().await.unwrap_or(false);
-        if healthy {
-            return Ok(Json(serde_json::json!({ "status": "connected" })));
-        }
-
-        if let Ok(Some(_)) = connector.get_qr_code().await {
-            return Ok(Json(serde_json::json!({ "status": "pairing" })));
-        }
-
-        let has_creds = {
-            let conn = state.runtime.db.lock().await;
-            crate::communication::db::has_baileys_credentials(&conn, "default_business")
-                .unwrap_or(false)
-        };
-        if has_creds {
-            return Ok(Json(serde_json::json!({ "status": "reconnecting" })));
-        }
-    }
-    Ok(Json(serde_json::json!({ "status": "unpaired" })))
-}
 
 // --- Real Estate Handlers ---
 
@@ -677,7 +630,7 @@ pub async fn register_package_core(manifest: &PackageManifest, meta_brain: &toki
 }
 
 pub async fn register_package_in_memory(manifest: &PackageManifest, state: &ApiState) {
-    register_package_core(manifest, &state.runtime.orchestrator.meta_brain).await;
+    register_package_core(manifest, &state.runtime.ai_agent.meta_brain).await;
 }
 
 pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &ApiState) {
@@ -718,7 +671,7 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
     }
 
     {
-        let mut brain = state.runtime.orchestrator.meta_brain.write().await;
+        let mut brain = state.runtime.ai_agent.meta_brain.write().await;
         *brain = crate::memory::meta_brain::MetaBrain::new();
         if let Ok(curr_dir) = std::env::current_dir() {
             let search_dirs = vec![

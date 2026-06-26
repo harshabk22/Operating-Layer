@@ -1,0 +1,14 @@
+[package]
+name = "moat_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+moat_core = { path = "../moat_core" }
+whatsapp-v1 = { path = "../whatsapp-v1" }
+tokio = { version = "1.37", features = ["full"] }
+dotenvy = "0.15.7"
+anyhow = "1.0"
+rusqlite = "0.39.0"
+dirs = "5"
+serde_json = { version = "1", features = ["preserve_order"] }

@@ -20,7 +20,7 @@ interface Thread {
   updated_at: number;
   control_mode: string;
   assigned_operator: string | null;
-  is_paused: number;
+  is_paused: boolean | number;
 }
 
 interface Contact {
@@ -51,6 +51,11 @@ export default function Inbox() {
   const [isLoading, setIsLoading] = useState(true);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const activeThreadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
 
   const fetchThreads = async () => {
     try {
@@ -86,32 +91,59 @@ export default function Inbox() {
   useEffect(() => {
     fetchThreads();
 
-    // Setup WebSocket
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = window.location.port === '3000' 
-      ? `${window.location.hostname}:8082` 
-      : window.location.host;
-    
-    const socket = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
+    let socket: WebSocket | null = null;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let isMounted = true;
 
-    socket.onmessage = (event) => {
-      try {
-        const evt = JSON.parse(event.data);
-        if (evt.type === 'new_message') {
-          fetchThreads();
-          if (activeThreadId && evt.data && evt.data.thread_id === activeThreadId) {
-            fetchThreadDetail(activeThreadId);
+    const connectWs = () => {
+      if (!isMounted) return;
+      
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsHost = window.location.port === '3000' 
+        ? `${window.location.hostname}:8080` 
+        : window.location.host;
+      
+      socket = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
+
+      socket.onmessage = (event) => {
+        try {
+          const evt = JSON.parse(event.data);
+          if (evt.type === 'new_message') {
+            fetchThreads();
+            const currentActiveId = activeThreadIdRef.current;
+            if (currentActiveId && evt.data && evt.data.thread_id === currentActiveId) {
+              fetchThreadDetail(currentActiveId);
+            }
           }
+        } catch (err) {
+          console.error('Error parsing WS message', err);
         }
-      } catch (err) {
-        console.error('Error parsing WS message', err);
-      }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket connection error:', err);
+      };
+
+      socket.onclose = () => {
+        console.log('WebSocket connection closed. Retrying in 3 seconds...');
+        if (isMounted) {
+          reconnectTimeout = setTimeout(connectWs, 3000);
+        }
+      };
     };
+
+    connectWs();
 
     return () => {
-      socket.close();
+      isMounted = false;
+      if (socket) {
+        socket.close();
+      }
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
     };
-  }, [activeThreadId]);
+  }, []);
 
   useEffect(() => {
     if (activeThreadId) {
@@ -224,7 +256,7 @@ export default function Inbox() {
                   }`}>
                     {t.control_mode}
                   </span>
-                  {t.is_paused === 1 && (
+                  {(t.is_paused === true || t.is_paused === 1) && (
                     <span className="text-[10px] bg-yellow-500/10 text-yellow-500 px-1.5 py-0.5 rounded font-medium">
                       PAUSED
                     </span>

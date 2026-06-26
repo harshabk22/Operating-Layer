@@ -3,15 +3,17 @@ pub mod capabilities;
 pub mod consent;
 
 pub mod injector;
-pub mod interaction_orchestrator;
-pub mod interaction_loop;
+pub mod loop_detector;
 pub mod system;
 pub mod execution;
 pub mod tools;
 
-pub mod worker;
+pub mod types;
+pub mod prompt;
 
 // Subdirectories
 pub mod context;
 pub mod llm;
 pub mod llm_types;
+pub mod ai_agent;
+

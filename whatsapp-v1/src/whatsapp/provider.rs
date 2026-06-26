@@ -1,18 +1,20 @@
 use super::models::{WhatsAppOutboundRequest, WhatsAppOutboundText};
-use crate::communication::connector::ChannelConnector;
-use crate::communication::types::{ChannelType, InteractionMessage};
-use crate::MoatError;
-use crate::MoatResult;
+use moat_core::communication::connector::ChannelConnector;
+use moat_core::communication::types::{ChannelType, InteractionMessage};
+use moat_core::MoatError;
+use moat_core::MoatResult;
 use async_trait::async_trait;
 use reqwest::Client;
 use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::RwLock;
+use tokio::sync::Mutex;
 
 pub struct WhatsAppConnector {
     client: Client,
     db: Arc<Mutex<Connection>>,
     base_url: String,
-    phone_number_id: String,
+    phone_number_id: Arc<RwLock<String>>,
     access_token_override: Option<String>,
 }
 
@@ -22,9 +24,14 @@ impl WhatsAppConnector {
             client: Client::new(),
             db,
             base_url: "https://graph.facebook.com".to_string(),
-            phone_number_id,
+            phone_number_id: Arc::new(RwLock::new(phone_number_id)),
             access_token_override: None,
         }
+    }
+
+    pub fn update_phone_number_id(&self, phone_number_id: String) {
+        let mut lock = self.phone_number_id.write().unwrap();
+        *lock = phone_number_id;
     }
 
     pub fn with_url(
@@ -37,7 +44,7 @@ impl WhatsAppConnector {
             client: Client::new(),
             db,
             base_url,
-            phone_number_id,
+            phone_number_id: Arc::new(RwLock::new(phone_number_id)),
             access_token_override: access_token,
         }
     }
@@ -48,8 +55,8 @@ impl WhatsAppConnector {
         }
         // Load from DB
         let creds = {
-            let conn = self.db.lock().unwrap();
-            crate::business::db::load_calendar_credentials(&conn, "default_business", "whatsapp")
+            let conn = self.db.lock().await;
+            moat_core::business::db::load_calendar_credentials(&conn, "default_business", "whatsapp")
         };
         match creds {
             Ok(Some((access_token, _, _))) => access_token,
@@ -67,7 +74,7 @@ impl ChannelConnector for WhatsAppConnector {
     async fn send_message(&self, message: InteractionMessage) -> MoatResult<()> {
         let mut to_number = message.customer_id.clone();
         if !to_number.starts_with("whatsapp:") {
-            let db = self.db.lock().unwrap();
+            let db = self.db.lock().await;
             let table_exists: bool = db
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_identity_mappings'",
@@ -114,7 +121,8 @@ impl ChannelConnector for WhatsAppConnector {
         };
 
         let token = self.get_access_token().await;
-        let url = format!("{}/v18.0/{}/messages", self.base_url, self.phone_number_id);
+        let phone_id = self.phone_number_id.read().unwrap().clone();
+        let url = format!("{}/v18.0/{}/messages", self.base_url, phone_id);
 
         let response = self
             .client
@@ -122,18 +130,22 @@ impl ChannelConnector for WhatsAppConnector {
             .bearer_auth(&token)
             .json(&payload)
             .send()
-            .await
-            .map_err(|e| {
-                let conn = self.db.lock().unwrap();
-                let _ = crate::business::db::increment_kpi_metric(&conn, "whatsapp_failures");
-                MoatError::Orchestrator(format!("Failed to send WhatsApp message: {}", e))
-            })?;
+            .await;
+
+        let response = match response {
+            Ok(resp) => resp,
+            Err(e) => {
+                let conn = self.db.lock().await;
+                let _ = moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_failures");
+                return Err(MoatError::Orchestrator(format!("Failed to send WhatsApp message: {}", e)));
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
             let err_text = response.text().await.unwrap_or_default();
-            let conn = self.db.lock().unwrap();
-            let _ = crate::business::db::increment_kpi_metric(&conn, "whatsapp_failures");
+            let conn = self.db.lock().await;
+            let _ = moat_core::business::db::increment_kpi_metric(&conn, "whatsapp_failures");
             return Err(MoatError::Orchestrator(format!(
                 "WhatsApp API returned error status {}: {}",
                 status, err_text
@@ -141,8 +153,8 @@ impl ChannelConnector for WhatsAppConnector {
         }
 
         {
-            let conn = self.db.lock().unwrap();
-            let _ = crate::business::db::increment_kpi_metric(&conn, "messages_sent");
+            let conn = self.db.lock().await;
+            let _ = moat_core::business::db::increment_kpi_metric(&conn, "messages_sent");
         }
 
         Ok(())

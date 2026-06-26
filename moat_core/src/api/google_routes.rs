@@ -17,6 +17,20 @@ pub struct ConnectResponse {
     pub url: String,
 }
 
+#[derive(Deserialize)]
+pub struct OAuthConfigSaveRequest {
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    pub redirect_uri: String,
+}
+
+#[derive(Serialize)]
+pub struct OAuthConfigResponse {
+    pub client_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub client_secret_configured: bool,
+}
+
 pub async fn google_connect_handler(
     State(state): State<ApiState>,
     Extension(session): Extension<UserSession>,
@@ -43,10 +57,20 @@ pub async fn google_connect_handler(
         }
     }
 
-    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "".to_string());
-    let base_url = std::env::var("MOAT_PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let redirect_uri = format!("{}/oauth/callback", base_url);
+    let conn = state.runtime.db.lock().await;
+    let config = db::read_google_config(&conn, &session.business_id).unwrap_or_default();
+
+    let client_id = config.client_id
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default());
+
+    let redirect_uri = config.redirect_uri
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            let base_url = std::env::var("MOAT_PUBLIC_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string());
+            format!("{}/oauth/callback", base_url)
+        });
 
     let scope = urlencoding::encode("https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile");
 
@@ -71,8 +95,6 @@ struct TokenResp {
     expires_in: i64,
 }
 
-
-
 pub async fn oauth_callback_handler(
     State(state): State<ApiState>,
     Query(query): Query<CallbackQuery>,
@@ -85,11 +107,28 @@ pub async fn oauth_callback_handler(
         }
     };
 
-    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
-    let base_url = std::env::var("MOAT_PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let redirect_uri = format!("{}/oauth/callback", base_url);
+    let (client_id, client_secret, redirect_uri) = {
+        let conn = state.runtime.db.lock().await;
+        let config = db::read_google_config(&conn, &business_id).unwrap_or_default();
+
+        let cid = config.client_id
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default());
+
+        let csec = config.client_secret
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default());
+
+        let ruri = config.redirect_uri
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                let base_url = std::env::var("MOAT_PUBLIC_BASE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8080".to_string());
+                format!("{}/oauth/callback", base_url)
+            });
+
+        (cid, csec, ruri)
+    };
 
     let params = [
         ("client_id", client_id.as_str()),
@@ -270,28 +309,93 @@ pub async fn google_config_handler(
     Json(req): Json<ConfigSaveRequest>,
 ) -> impl IntoResponse {
     let conn = state.runtime.db.lock().await;
-    let config = json!({
-        "client_id": std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
-        "selected_spreadsheet_id": req.spreadsheet_id
-    });
+    let mut config = db::read_google_config(&conn, &session.business_id).unwrap_or_default();
+    
+    // Merge settings
+    config.selected_spreadsheet_id = req.spreadsheet_id;
 
     let key = std::env::var("MOAT_SECRET_KEY").unwrap_or_else(|_| "MoatAgeexSuperSecretKey123".to_string());
-    let encrypted_config = crate::security::encryption::encrypt_credential(&config.to_string(), &key);
+    let config_str = serde_json::to_string(&config).unwrap_or_default();
+    let encrypted_config = crate::security::encryption::encrypt_credential(&config_str, &key);
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().timestamp();
 
     let mut stmt = match conn.prepare(
-        "INSERT INTO connection_instances (business_id, provider_id, configuration) 
-         VALUES (?1, ?2, ?3) 
-         ON CONFLICT(business_id, provider_id) DO UPDATE SET configuration=excluded.configuration"
+        "INSERT INTO connection_instances (id, business_id, provider_id, configuration, created_at, updated_at) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) 
+         ON CONFLICT(business_id, provider_id) DO UPDATE SET 
+             configuration=excluded.configuration,
+             updated_at=excluded.updated_at"
     ) {
         Ok(stmt) => stmt,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    if stmt.execute((
-        &session.business_id,
-        "google",
-        encrypted_config
-    )).is_err() {
+    if stmt.execute((&id, &session.business_id, "google", encrypted_config, now, now)).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(json!({"success": true})).into_response()
+}
+
+pub async fn get_google_oauth_config_handler(
+    State(state): State<ApiState>,
+    Extension(session): Extension<UserSession>,
+) -> impl IntoResponse {
+    let conn = state.runtime.db.lock().await;
+    let config = db::read_google_config(&conn, &session.business_id).unwrap_or_default();
+
+    let response = OAuthConfigResponse {
+        client_id: config.client_id,
+        redirect_uri: config.redirect_uri,
+        client_secret_configured: config.client_secret.is_some() && !config.client_secret.unwrap().is_empty(),
+    };
+
+    Json(response).into_response()
+}
+
+pub async fn save_google_oauth_config_handler(
+    State(state): State<ApiState>,
+    Extension(session): Extension<UserSession>,
+    Json(req): Json<OAuthConfigSaveRequest>,
+) -> impl IntoResponse {
+    let conn = state.runtime.db.lock().await;
+    let mut config = db::read_google_config(&conn, &session.business_id).unwrap_or_default();
+
+    config.client_id = Some(req.client_id);
+    config.redirect_uri = Some(req.redirect_uri);
+
+    if let Some(secret) = req.client_secret {
+        let trimmed = secret.trim();
+        if !trimmed.is_empty() && trimmed != "********" {
+            config.client_secret = Some(trimmed.to_string());
+        }
+    }
+
+    // Purge old tokens on settings edit
+    let _ = db::delete_calendar_credentials(&conn, &session.business_id, "google");
+    let _ = db::delete_calendar_credentials(&conn, &session.business_id, "google_sheets");
+
+    let key = std::env::var("MOAT_SECRET_KEY").unwrap_or_else(|_| "MoatAgeexSuperSecretKey123".to_string());
+    let config_str = serde_json::to_string(&config).unwrap_or_default();
+    let encrypted_config = crate::security::encryption::encrypt_credential(&config_str, &key);
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().timestamp();
+
+    let mut stmt = match conn.prepare(
+        "INSERT INTO connection_instances (id, business_id, provider_id, configuration, created_at, updated_at) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) 
+         ON CONFLICT(business_id, provider_id) DO UPDATE SET 
+             configuration=excluded.configuration,
+             updated_at=excluded.updated_at"
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if stmt.execute((&id, &session.business_id, "google", encrypted_config, now, now)).is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 

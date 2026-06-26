@@ -362,6 +362,23 @@ DROP INDEX IF EXISTS idx_proj_eng_thread;
 DROP INDEX IF EXISTS idx_proj_ident_contact;
             "#,
         },
+        Migration {
+            version: 3,
+            up: r#"
+CREATE TABLE IF NOT EXISTS business_cron_schedules (
+    id TEXT PRIMARY KEY,
+    cron_expression TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    allowed_tools TEXT,
+    last_run_at INTEGER,
+    next_run_at INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1
+);
+            "#,
+            down: r#"
+DROP TABLE IF EXISTS business_cron_schedules;
+            "#,
+        },
     ]
 }
 

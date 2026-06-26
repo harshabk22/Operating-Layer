@@ -17,7 +17,6 @@ pub mod hooks;
 pub mod integration;
 pub mod manifest;
 pub mod memory;
-pub mod planner;
 pub mod security;
 pub mod session;
 pub mod package;
