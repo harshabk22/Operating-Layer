@@ -902,7 +902,7 @@ impl AIAgent {
             }
 
             let resp = self.provider.chat_complete(
-                "gpt-4-turbo",
+                &agent_spec.model_id,
                 state.context_trace.clone(),
                 Some(cached_tools),
                 2000,

@@ -717,7 +717,12 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
                                 }
 
                                 if let Ok(curr_dir) = std::env::current_dir() {
-                                    let pkg_skills_dir = curr_dir.join("packages").join(&other_id).join("skills");
+                                    let pkg_dir = if curr_dir.join("moat_core").join("packages").join(&other_id).exists() {
+                                        curr_dir.join("moat_core").join("packages").join(&other_id)
+                                    } else {
+                                        curr_dir.join("packages").join(&other_id)
+                                    };
+                                    let pkg_skills_dir = pkg_dir.join("skills");
                                     if pkg_skills_dir.exists() {
                                         if let Ok(entries) = std::fs::read_dir(pkg_skills_dir) {
                                             for entry in entries.flatten() {
@@ -743,7 +748,7 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
                                         }
                                     }
 
-                                    let pkg_workflows_dir = curr_dir.join("packages").join(&other_id).join("workflows");
+                                    let pkg_workflows_dir = pkg_dir.join("workflows");
                                     if pkg_workflows_dir.exists() {
                                         if let Ok(entries) = std::fs::read_dir(pkg_workflows_dir) {
                                             for entry in entries.flatten() {
@@ -1436,3 +1441,189 @@ pub async fn list_notifications_handler(State(state): State<ApiState>, Extension
     Ok(axum::Json(results))
 }
 
+// --- System Settings Handlers ---
+
+pub async fn get_settings_handler(
+    State(state): State<ApiState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let provider = std::env::var("AGEEX_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
+    let has_google = std::env::var("GOOGLE_API_KEY").is_ok() || std::env::var("GOOGLE_CLIENT_ID").is_ok();
+    let has_deepseek = std::env::var("DEEPSEEK_API_KEY").is_ok();
+    let has_whatsapp = std::env::var("WHATSAPP_ENABLED").is_ok() || true;
+    let has_telegram = std::env::var("TELEGRAM_BOT_TOKEN").is_ok();
+
+    let conn = state.runtime.db.lock().await;
+    let total_threads: i64 = conn.query_row("SELECT COUNT(*) FROM business_interaction_threads", [], |r| r.get(0)).unwrap_or(0);
+    let total_contacts: i64 = conn.query_row("SELECT COUNT(*) FROM business_external_contacts", [], |r| r.get(0)).unwrap_or(0);
+    let total_events: i64 = conn.query_row("SELECT COUNT(*) FROM business_event_store", [], |r| r.get(0)).unwrap_or(0);
+
+    Ok(Json(serde_json::json!({
+        "provider": provider,
+        "has_google": has_google,
+        "has_deepseek": has_deepseek,
+        "has_whatsapp": has_whatsapp,
+        "has_telegram": has_telegram,
+        "chat_model": std::env::var("CHAT_MODEL").unwrap_or_else(|_| "default".to_string()),
+        "planner_model": std::env::var("PLANNER_MODEL").unwrap_or_else(|_| "default".to_string()),
+        "worker_model": std::env::var("WORKER_MODEL").unwrap_or_else(|_| "default".to_string()),
+        "tenant_name": std::env::var("TENANT_NAME").unwrap_or_else(|_| "Moat Default Tenant".to_string()),
+        "stats": {
+            "total_threads": total_threads,
+            "total_contacts": total_contacts,
+            "total_events": total_events
+        }
+    })))
+}
+
+pub async fn update_settings_handler(
+    State(_state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(provider) = payload.get("provider").and_then(|v| v.as_str()) {
+        std::env::set_var("AGEEX_PROVIDER", provider);
+    }
+    if let Some(chat_model) = payload.get("chat_model").and_then(|v| v.as_str()) {
+        std::env::set_var("CHAT_MODEL", chat_model);
+    }
+    if let Some(planner_model) = payload.get("planner_model").and_then(|v| v.as_str()) {
+        std::env::set_var("PLANNER_MODEL", planner_model);
+    }
+    if let Some(worker_model) = payload.get("worker_model").and_then(|v| v.as_str()) {
+        std::env::set_var("WORKER_MODEL", worker_model);
+    }
+    if let Some(tenant_name) = payload.get("tenant_name").and_then(|v| v.as_str()) {
+        std::env::set_var("TENANT_NAME", tenant_name);
+    }
+    Ok(Json(serde_json::json!({ "status": "success", "message": "Settings updated" })))
+}
+
+// --- System Observability Handlers ---
+
+pub async fn system_health_handler(
+    State(state): State<ApiState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+
+    let page_count: i64 = conn.query_row("SELECT page_count FROM pragma_page_count()", [], |r| r.get(0)).unwrap_or(0);
+    let page_size: i64 = conn.query_row("SELECT page_size FROM pragma_page_size()", [], |r| r.get(0)).unwrap_or(4096);
+    let db_size_bytes = page_count * page_size;
+
+    let total_events: i64 = conn.query_row("SELECT COUNT(*) FROM business_event_store", [], |r| r.get(0)).unwrap_or(0);
+    let total_projections: i64 = conn.query_row("SELECT COUNT(*) FROM projections", [], |r| r.get(0)).unwrap_or(0);
+    let total_jobs: i64 = conn.query_row("SELECT COUNT(*) FROM business_background_jobs", [], |r| r.get(0)).unwrap_or(0);
+    let pending_jobs: i64 = conn.query_row("SELECT COUNT(*) FROM business_background_jobs WHERE status = 'pending'", [], |r| r.get(0)).unwrap_or(0);
+    let failed_jobs: i64 = conn.query_row("SELECT COUNT(*) FROM business_background_jobs WHERE status = 'failed'", [], |r| r.get(0)).unwrap_or(0);
+    let pending_outbox: i64 = conn.query_row("SELECT COUNT(*) FROM business_message_outbox WHERE status = 'pending'", [], |r| r.get(0)).unwrap_or(0);
+    drop(conn);
+
+    let active_sessions = state.auth_store.sessions.len();
+
+    Ok(Json(serde_json::json!({
+        "status": "healthy",
+        "db_size_bytes": db_size_bytes,
+        "db_size_mb": format!("{:.2}", db_size_bytes as f64 / 1_048_576.0),
+        "active_sessions": active_sessions,
+        "total_events": total_events,
+        "total_projections": total_projections,
+        "total_jobs": total_jobs,
+        "pending_jobs": pending_jobs,
+        "failed_jobs": failed_jobs,
+        "pending_outbox": pending_outbox,
+        "version": env!("CARGO_PKG_VERSION"),
+    })))
+}
+
+pub async fn system_metrics_handler(
+    State(state): State<ApiState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let metrics = crate::business::metrics::get_reliability_metrics(&conn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(metrics))
+}
+
+pub async fn list_jobs_handler(
+    State(state): State<ApiState>,
+    Extension(_session): Extension<UserSession>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare(
+        "SELECT id, job_type, status, retries, run_at, last_error, created_at
+         FROM business_background_jobs
+         ORDER BY created_at DESC LIMIT 200"
+    ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "job_type": row.get::<_, String>(1)?,
+            "status": row.get::<_, String>(2)?,
+            "retries": row.get::<_, i64>(3)?,
+            "run_at": row.get::<_, i64>(4)?,
+            "last_error": row.get::<_, Option<String>>(5)?,
+            "created_at": row.get::<_, i64>(6)?
+        }))
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(Json(results))
+}
+
+pub async fn list_outbox_handler(
+    State(state): State<ApiState>,
+    Extension(session): Extension<UserSession>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare(
+        "SELECT id, channel, customer_id, direction, body, status, run_at, last_error, created_at
+         FROM business_message_outbox
+         WHERE business_id = ?1
+         ORDER BY created_at DESC LIMIT 200"
+    ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = stmt.query_map([&session.business_id], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "channel": row.get::<_, String>(1)?,
+            "customer_id": row.get::<_, String>(2)?,
+            "direction": row.get::<_, String>(3)?,
+            "body": row.get::<_, String>(4)?,
+            "status": row.get::<_, String>(5)?,
+            "run_at": row.get::<_, i64>(6)?,
+            "last_error": row.get::<_, Option<String>>(7)?,
+            "created_at": row.get::<_, i64>(8)?
+        }))
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(Json(results))
+}
+
+pub async fn list_audit_handler(
+    State(state): State<ApiState>,
+    Extension(_session): Extension<UserSession>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare(
+        "SELECT id, action, target_id, performed_by, performed_at, reason
+         FROM business_owner_audit_trail
+         ORDER BY performed_at DESC LIMIT 200"
+    ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "action": row.get::<_, String>(1)?,
+            "target_id": row.get::<_, String>(2)?,
+            "performed_by": row.get::<_, String>(3)?,
+            "performed_at": row.get::<_, i64>(4)?,
+            "reason": row.get::<_, Option<String>>(5)?
+        }))
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut results = Vec::new();
+    for v in rows.flatten() { results.push(v); }
+    Ok(Json(results))
+}

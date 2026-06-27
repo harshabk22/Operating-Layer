@@ -310,6 +310,7 @@ impl WhatsAppBaileysConnector {
 
     async fn health_watcher_loop(&self) {
         let mut prev_state = "unpaired".to_string();
+        let mut consecutive_failures = 0;
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -327,6 +328,17 @@ impl WhatsAppBaileysConnector {
             } else {
                 None
             };
+
+            if state_opt.is_none() {
+                consecutive_failures += 1;
+                if consecutive_failures >= 3 {
+                    println!("[Baileys Watcher] WhatsApp bridge is unresponsive. Attempting restart...");
+                    let _ = self.start_bridge().await;
+                    consecutive_failures = 0;
+                }
+            } else {
+                consecutive_failures = 0;
+            }
 
             let has_creds = {
                 let conn = self.db.lock().await;

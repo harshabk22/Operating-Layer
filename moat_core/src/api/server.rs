@@ -169,6 +169,13 @@ pub async fn start_api_server(
         .route("/dashboard/kpis", get(crate::api::routes::get_dashboard_kpis_handler))
         .route("/system/events", get(crate::api::routes::list_events_handler))
         .route("/system/rbac", get(crate::api::routes::rbac_guard_handler))
+        // system settings & observability
+        .route("/system/settings", get(crate::api::routes::get_settings_handler).put(crate::api::routes::update_settings_handler))
+        .route("/system/health", get(crate::api::routes::system_health_handler))
+        .route("/system/metrics", get(crate::api::routes::system_metrics_handler))
+        .route("/system/jobs", get(crate::api::routes::list_jobs_handler))
+        .route("/system/outbox", get(crate::api::routes::list_outbox_handler))
+        .route("/system/audit", get(crate::api::routes::list_audit_handler))
         // setup / supervisor
         .route("/setup/status", get(crate::api::setup::get_setup_status_handler))
         .route("/setup/configure", post(crate::api::setup::configure_provider_handler))

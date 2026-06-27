@@ -762,9 +762,18 @@ impl LlmProvider for GoogleMultiClient {
                     client: self.client.clone(),
                     api_key: credential.api_key.clone(),
                 };
+                let target_model = if credential.model_hint.trim().is_empty() {
+                    if model.to_ascii_lowercase().contains("gemini") {
+                        model
+                    } else {
+                        "gemini-2.5-flash"
+                    }
+                } else {
+                    credential.model_hint.trim()
+                };
                 match client
                     .chat_complete(
-                        model,
+                        target_model,
                         messages.clone(),
                         tools.clone(),
                         max_tokens,
@@ -966,9 +975,18 @@ impl LlmProvider for DeepSeekMultiClient {
                     client: self.client.clone(),
                     api_key: credential.api_key.clone(),
                 };
+                let target_model = if credential.model_hint.trim().is_empty() {
+                    if model.to_ascii_lowercase().contains("deepseek") {
+                        model
+                    } else {
+                        "deepseek-chat"
+                    }
+                } else {
+                    credential.model_hint.trim()
+                };
                 match client
                     .chat_complete(
-                        model,
+                        target_model,
                         messages.clone(),
                         tools.clone(),
                         max_tokens,

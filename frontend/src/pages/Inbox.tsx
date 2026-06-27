@@ -92,7 +92,7 @@ export default function Inbox() {
     fetchThreads();
 
     let socket: WebSocket | null = null;
-    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let reconnectTimeout: any = null;
     let isMounted = true;
 
     const connectWs = () => {

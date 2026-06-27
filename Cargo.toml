@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["moat_app",
+members = [
+    "moat_app",
     "moat_core",
     "real-estate-v1",
-    "sales-core-v1"
-
-, "whatsapp-v1"]
+    "sales-core-v1",
+    "whatsapp-v1",
+    "moat_admin/backend"
+]

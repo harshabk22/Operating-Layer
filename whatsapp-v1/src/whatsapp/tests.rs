@@ -34,7 +34,7 @@ impl StubProvider {
 impl LlmProvider for StubProvider {
     fn chat_complete<'a>(
         &'a self,
-        _model: &'a str,
+        model: &'a str,
         _messages: Vec<LlmMessage>,
         _tools: Option<Vec<moat_core::agent::llm_types::LlmTool>>,
         _max_tokens: usize,
@@ -42,6 +42,12 @@ impl LlmProvider for StubProvider {
         _response_format: Option<serde_json::Value>,
     ) -> BoxFuture<'a, MoatResult<LlmResponse>> {
         Box::pin(async move {
+            // Validation: Reject hardcoded OpenAI models if this provider is supposed to represent deepseek/google
+            if model == "gpt-4-turbo" {
+                return Err(moat_core::MoatError::Llm(
+                    "Invalid requested model for provider (hardcoded gpt-4-turbo was rejected)".into()
+                ));
+            }
             let (text, tokens) = {
                 let lock = self.response.lock().expect("lock stub response");
                 if let Some(ref val) = *lock {
