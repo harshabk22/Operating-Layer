@@ -6,15 +6,30 @@ export const fetcher = async (url: string) => {
   if (res.status === 401 || res.status === 403) {
     localStorage.removeItem('auth');
     localStorage.removeItem('role');
-    window.location.href = '/login';
+    if (window.location.pathname !== '/login') {
+      window.location.assign('/login');
+    }
     throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error('Network error');
+  if (!res.ok) {
+    let errorDetail: string;
+    try {
+      const errJson = await res.json();
+      errorDetail = errJson.error || errJson.message || `HTTP ${res.status}`;
+    } catch {
+      errorDetail = res.statusText || `HTTP ${res.status}`;
+    }
+    throw new Error(errorDetail);
+  }
   return res.json();
 };
 
-export function useData(endpoint: string) {
-  return useQuery({ queryKey: [endpoint], queryFn: () => fetcher(endpoint) });
+export function useData(endpoint: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: [endpoint],
+    queryFn: () => fetcher(endpoint),
+    enabled: options?.enabled ?? true,
+  });
 }
 
 export function useMutateData(endpoint: string, successMessage: string) {
@@ -22,7 +37,7 @@ export function useMutateData(endpoint: string, successMessage: string) {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: unknown) => {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -31,18 +46,37 @@ export function useMutateData(endpoint: string, successMessage: string) {
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
         localStorage.removeItem('role');
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login') {
+          window.location.assign('/login');
+        }
         throw new Error('Unauthorized');
       }
-      if (!res.ok) throw new Error('Failed');
-      return res.json();
+      if (!res.ok) {
+        let errorDetail: string;
+        try {
+          const errJson = await res.json();
+          errorDetail = errJson.error || errJson.message || `HTTP ${res.status}`;
+        } catch {
+          errorDetail = res.statusText || `HTTP ${res.status}`;
+        }
+        throw new Error(errorDetail);
+      }
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
     },
     onSuccess: () => {
       toast({ title: "Success", description: successMessage });
       queryClient.invalidateQueries();
     },
-    onError: () => {
-      toast({ title: "Error", description: "Operation failed", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error?.message || "Operation failed",
+        variant: "destructive"
+      });
     }
   });
 }

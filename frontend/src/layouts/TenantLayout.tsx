@@ -9,18 +9,78 @@ import {
   ShieldAlert, 
   FolderSync, 
   Activity, 
-  LogOut,
-  HelpCircle,
-  CheckSquare,
-  Calendar
+  LogOut, 
+  HelpCircle, 
+  CheckSquare, 
+  Calendar 
 } from "lucide-react";
 import * as Icons from "lucide-react";
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useData } from "@/lib/api";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+
+interface NavItem {
+  path: string;
+  label: string;
+  icon: string;
+}
+
+interface NavGroup {
+  label: string;
+  items?: NavItem[];
+}
+
+interface InstalledPackage {
+  id: string;
+  navigation_entries?: NavGroup[];
+}
+
+const CORE_LINKS = [
+  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/inbox', label: 'Inbox', icon: MessageSquare },
+  { path: '/marketplace', label: 'Marketplace', icon: Package },
+  { path: '/studio', label: 'Package Studio', icon: Workflow },
+  { path: '/approvals', label: 'Approvals', icon: CheckSquare },
+  { path: '/calendar', label: 'Calendar', icon: Calendar },
+];
+
+const GOVERNANCE_LINKS = [
+  { path: '/settings', label: 'Settings', icon: SettingsIcon },
+  { path: '/users', label: 'Users', icon: UsersIcon },
+  { path: '/roles', label: 'Roles', icon: ShieldAlert },
+  { path: '/integrations', label: 'Integrations', icon: FolderSync },
+  { path: '/observability', label: 'Observability', icon: Activity },
+];
+
+function NavLinkItem({
+  to,
+  label,
+  icon,
+  isActive,
+}: {
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+  isActive: boolean;
+}) {
+  return (
+    <Link
+      to={to}
+      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+        isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
+      }`}
+    >
+      {icon}
+      {label}
+    </Link>
+  );
+}
 
 export default function TenantLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
   const [role] = useState(localStorage.getItem('role') || 'viewer');
   const { data: installedPackages, isLoading } = useData('/api/platform/packages');
 
@@ -38,11 +98,13 @@ export default function TenantLayout() {
     }
     localStorage.removeItem('auth');
     localStorage.removeItem('role');
+    queryClient.clear();
     navigate('/login');
   };
 
   const getDynamicIcon = (name: string) => {
-    const IconComponent = (Icons as any)[name];
+    const iconMap = Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>;
+    const IconComponent = iconMap[name];
     return IconComponent ? <IconComponent className="h-4 w-4" /> : <HelpCircle className="h-4 w-4" />;
   };
 
@@ -64,74 +126,33 @@ export default function TenantLayout() {
             <div className="px-3 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Core Platform
             </div>
-            <Link 
-              to="/" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <LayoutDashboard className="h-4 w-4" /> Dashboard
-            </Link>
-            <Link 
-              to="/inbox" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/inbox') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <MessageSquare className="h-4 w-4" /> Inbox
-            </Link>
-            <Link 
-              to="/marketplace" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/marketplace') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <Package className="h-4 w-4" /> Marketplace
-            </Link>
-            <Link 
-              to="/studio" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/studio') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <Workflow className="h-4 w-4" /> Package Studio
-            </Link>
-            <Link 
-              to="/approvals" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/approvals') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <CheckSquare className="h-4 w-4" /> Approvals
-            </Link>
-            <Link 
-              to="/calendar" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/calendar') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <Calendar className="h-4 w-4" /> Calendar
-            </Link>
+            {CORE_LINKS.map(({ path, label, icon: Icon }) => (
+              <NavLinkItem
+                key={path}
+                to={path}
+                label={label}
+                icon={<Icon className="h-4 w-4" />}
+                isActive={isActive(path)}
+              />
+            ))}
           </div>
 
           {/* Dynamic Business Packages Section */}
-          {!isLoading && installedPackages && (installedPackages as any[]).map((pkg: any) => (
+          {!isLoading && installedPackages && (installedPackages as InstalledPackage[]).map((pkg) => (
             <div key={pkg.id} className="space-y-1">
-              {pkg.navigation_entries && pkg.navigation_entries.map((group: any, idx: number) => (
+              {pkg.navigation_entries?.map((group, idx) => (
                 <div key={idx} className="space-y-1">
                   <div className="px-3 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     {group.label}
                   </div>
-                  {group.items && group.items.map((item: any) => (
-                    <Link
+                  {group.items?.map((item) => (
+                    <NavLinkItem
                       key={item.path}
                       to={item.path}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        isActive(item.path) ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-                      }`}
-                    >
-                      {getDynamicIcon(item.icon)} {item.label}
-                    </Link>
+                      label={item.label}
+                      icon={getDynamicIcon(item.icon)}
+                      isActive={isActive(item.path)}
+                    />
                   ))}
                 </div>
               ))}
@@ -143,46 +164,15 @@ export default function TenantLayout() {
             <div className="px-3 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Governance
             </div>
-            <Link 
-              to="/settings" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/settings') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <SettingsIcon className="h-4 w-4" /> Settings
-            </Link>
-            <Link 
-              to="/users" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/users') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <UsersIcon className="h-4 w-4" /> Users
-            </Link>
-            <Link 
-              to="/roles" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/roles') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <ShieldAlert className="h-4 w-4" /> Roles
-            </Link>
-            <Link 
-              to="/integrations" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/integrations') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <FolderSync className="h-4 w-4" /> Integrations
-            </Link>
-            <Link 
-              to="/observability" 
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive('/observability') ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-              }`}
-            >
-              <Activity className="h-4 w-4" /> Observability
-            </Link>
+            {GOVERNANCE_LINKS.map(({ path, label, icon: Icon }) => (
+              <NavLinkItem
+                key={path}
+                to={path}
+                label={label}
+                icon={<Icon className="h-4 w-4" />}
+                isActive={isActive(path)}
+              />
+            ))}
           </div>
         </nav>
 
@@ -206,7 +196,9 @@ export default function TenantLayout() {
           </div>
         </header>
         <div className="flex-1 overflow-auto p-8">
-          <Outlet />
+          <ErrorBoundary fallbackTitle="Page Error">
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </main>
     </div>

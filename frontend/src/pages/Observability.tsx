@@ -20,6 +20,53 @@ import {
 
 type Tab = 'health' | 'jobs' | 'outbox' | 'audit' | 'events';
 
+interface JobItem {
+  id: string;
+  job_type: string;
+  status: string;
+  retry_count?: number;
+  retries?: number;
+  scheduled_at?: string | number;
+  run_at?: string | number;
+  completed_at?: string | number;
+  created_at?: string | number;
+  error_message?: string;
+  last_error?: string;
+}
+
+interface OutboxItem {
+  id: string;
+  channel: string;
+  recipient?: string;
+  customer_id?: string;
+  status: string;
+  created_at?: string | number;
+  sent_at?: string | number;
+  run_at?: string | number;
+  error_message?: string;
+  last_error?: string;
+}
+
+interface AuditItem {
+  id: string;
+  actor?: string;
+  performed_by?: string;
+  action: string;
+  entity_type?: string;
+  entity_id?: string;
+  target_id?: string;
+  details?: string;
+  reason?: string;
+  created_at?: string | number;
+  performed_at?: string | number;
+}
+
+interface EventItem {
+  timestamp: number;
+  event_type: string;
+  aggregate_id: string;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const normalized = status?.toLowerCase() ?? '';
   let classes = 'text-xs font-medium px-2.5 py-1 rounded-full border ';
@@ -66,6 +113,54 @@ function MetricCard({
   );
 }
 
+function ReliabilityMetric({
+  label,
+  value,
+  warn = false,
+}: {
+  label: string;
+  value: string | number;
+  warn?: boolean;
+}) {
+  return (
+    <div className="border rounded-md bg-card p-4">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={`text-xl font-bold mt-1 ${warn ? 'text-red-400' : ''}`}>{value}</p>
+    </div>
+  );
+}
+
+function DataTableCard({
+  title,
+  loading,
+  loadingText,
+  empty,
+  emptyText,
+  children,
+}: {
+  title: string;
+  loading: boolean;
+  loadingText: string;
+  empty: boolean;
+  emptyText: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border rounded-md bg-card">
+      <h2 className="p-4 font-semibold border-b">{title}</h2>
+      {loading ? (
+        <div className="p-8 text-center text-muted-foreground">{loadingText}</div>
+      ) : empty ? (
+        <div className="p-8 text-center text-muted-foreground">{emptyText}</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">{children}</table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Observability() {
   const [activeTab, setActiveTab] = useState<Tab>('health');
 
@@ -84,6 +179,26 @@ export default function Observability() {
     { key: 'audit', label: 'Audit Trail', icon: <Shield className="h-4 w-4" /> },
     { key: 'events', label: 'Events', icon: <Radio className="h-4 w-4" /> },
   ];
+
+  const systemMetrics = [
+    { icon: <Database className="h-4 w-4 text-muted-foreground" />, label: 'DB Size', value: health?.db_size_mb ? `${health.db_size_mb} MB` : '—' },
+    { icon: <Users className="h-4 w-4 text-muted-foreground" />, label: 'Active Sessions', value: health?.active_sessions ?? 0 },
+    { icon: <Tag className="h-4 w-4 text-muted-foreground" />, label: 'Version', value: health?.version || '—' },
+    { icon: <Layers className="h-4 w-4 text-muted-foreground" />, label: 'Total Events', value: health?.total_events ?? 0 },
+    { icon: <Layers className="h-4 w-4 text-muted-foreground" />, label: 'Total Projections', value: health?.total_projections ?? 0 },
+    { icon: <Clock className="h-4 w-4 text-muted-foreground" />, label: 'Pending Jobs', value: health?.pending_jobs ?? 0 },
+    { icon: <AlertTriangle className="h-4 w-4 text-muted-foreground" />, label: 'Failed Jobs', value: health?.failed_jobs ?? 0 },
+    { icon: <Mail className="h-4 w-4 text-muted-foreground" />, label: 'Pending Outbox', value: health?.pending_outbox ?? 0 },
+  ];
+
+  const reliabilityMetrics = metrics ? [
+    { label: 'Avg Message Latency', value: metrics.average_message_latency != null ? `${metrics.average_message_latency}ms` : '—' },
+    { label: 'Avg Booking Latency', value: metrics.average_booking_latency != null ? `${metrics.average_booking_latency}ms` : '—' },
+    { label: 'Calendar Failures', value: metrics.calendar_failures ?? 0, warn: (metrics.calendar_failures ?? 0) > 0 },
+    { label: 'Sheets Failures', value: metrics.sheets_failures ?? 0, warn: (metrics.sheets_failures ?? 0) > 0 },
+    { label: 'Notification Failures', value: metrics.notification_failures ?? 0, warn: (metrics.notification_failures ?? 0) > 0 },
+    { label: 'Total Retries', value: metrics.total_retry_count ?? 0 },
+  ] : [];
 
   return (
     <div className="space-y-6">
@@ -136,46 +251,9 @@ export default function Observability() {
                   System Overview
                 </h2>
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                  <MetricCard
-                    icon={<Database className="h-4 w-4 text-muted-foreground" />}
-                    label="DB Size"
-                    value={health?.db_size_mb ? `${health.db_size_mb} MB` : '—'}
-                  />
-                  <MetricCard
-                    icon={<Users className="h-4 w-4 text-muted-foreground" />}
-                    label="Active Sessions"
-                    value={health?.active_sessions ?? 0}
-                  />
-                  <MetricCard
-                    icon={<Tag className="h-4 w-4 text-muted-foreground" />}
-                    label="Version"
-                    value={health?.version || '—'}
-                  />
-                  <MetricCard
-                    icon={<Layers className="h-4 w-4 text-muted-foreground" />}
-                    label="Total Events"
-                    value={health?.total_events ?? 0}
-                  />
-                  <MetricCard
-                    icon={<Layers className="h-4 w-4 text-muted-foreground" />}
-                    label="Total Projections"
-                    value={health?.total_projections ?? 0}
-                  />
-                  <MetricCard
-                    icon={<Clock className="h-4 w-4 text-muted-foreground" />}
-                    label="Pending Jobs"
-                    value={health?.pending_jobs ?? 0}
-                  />
-                  <MetricCard
-                    icon={<AlertTriangle className="h-4 w-4 text-muted-foreground" />}
-                    label="Failed Jobs"
-                    value={health?.failed_jobs ?? 0}
-                  />
-                  <MetricCard
-                    icon={<Mail className="h-4 w-4 text-muted-foreground" />}
-                    label="Pending Outbox"
-                    value={health?.pending_outbox ?? 0}
-                  />
+                  {systemMetrics.map((m) => (
+                    <MetricCard key={m.label} icon={m.icon} label={m.label} value={m.value} />
+                  ))}
                 </div>
               </div>
 
@@ -186,33 +264,9 @@ export default function Observability() {
                     Reliability Metrics
                   </h2>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    <ReliabilityMetric
-                      label="Avg Message Latency"
-                      value={metrics.average_message_latency != null ? `${metrics.average_message_latency}ms` : '—'}
-                    />
-                    <ReliabilityMetric
-                      label="Avg Booking Latency"
-                      value={metrics.average_booking_latency != null ? `${metrics.average_booking_latency}ms` : '—'}
-                    />
-                    <ReliabilityMetric
-                      label="Calendar Failures"
-                      value={metrics.calendar_failures ?? 0}
-                      warn={(metrics.calendar_failures ?? 0) > 0}
-                    />
-                    <ReliabilityMetric
-                      label="Sheets Failures"
-                      value={metrics.sheets_failures ?? 0}
-                      warn={(metrics.sheets_failures ?? 0) > 0}
-                    />
-                    <ReliabilityMetric
-                      label="Notification Failures"
-                      value={metrics.notification_failures ?? 0}
-                      warn={(metrics.notification_failures ?? 0) > 0}
-                    />
-                    <ReliabilityMetric
-                      label="Total Retries"
-                      value={metrics.total_retry_count ?? 0}
-                    />
+                    {reliabilityMetrics.map((m) => (
+                      <ReliabilityMetric key={m.label} label={m.label} value={m.value} warn={m.warn} />
+                    ))}
                   </div>
                 </div>
               )}
@@ -223,153 +277,143 @@ export default function Observability() {
 
       {/* Tab: Jobs */}
       {activeTab === 'jobs' && (
-        <div className="border rounded-md bg-card">
-          <h2 className="p-4 font-semibold border-b">Background Jobs</h2>
-          {jobsLoading ? (
-            <div className="p-8 text-center text-muted-foreground">Loading jobs...</div>
-          ) : !jobs?.length ? (
-            <div className="p-8 text-center text-muted-foreground">No background jobs found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-accent/30">
-                    <th className="text-left p-3 font-medium text-muted-foreground">Type</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Retries</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Scheduled</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Completed</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {jobs.map((job: any) => (
-                    <tr key={job.id} className="border-b border-border/50 hover:bg-accent/20">
-                      <td className="p-3 font-medium">{job.job_type}</td>
-                      <td className="p-3">
-                        <StatusBadge status={job.status} />
-                      </td>
-                      <td className="p-3 text-muted-foreground">{job.retry_count}</td>
-                      <td className="p-3 text-muted-foreground font-mono text-xs">
-                        {formatTimestamp(job.scheduled_at)}
-                      </td>
-                      <td className="p-3 text-muted-foreground font-mono text-xs">
-                        {formatTimestamp(job.completed_at)}
-                      </td>
-                      <td className="p-3 text-red-400 text-xs max-w-[200px] truncate" title={job.error_message || ''}>
-                        {job.error_message || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <DataTableCard
+          title="Background Jobs"
+          loading={jobsLoading}
+          loadingText="Loading jobs..."
+          empty={!jobs?.length}
+          emptyText="No background jobs found."
+        >
+          <thead>
+            <tr className="border-b bg-accent/30">
+              <th className="text-left p-3 font-medium text-muted-foreground">Type</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Retries</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Scheduled</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Completed</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs?.map((job: JobItem) => (
+              <tr key={job.id} className="border-b border-border/50 hover:bg-accent/20">
+                <td className="p-3 font-medium">{job.job_type}</td>
+                <td className="p-3">
+                  <StatusBadge status={job.status} />
+                </td>
+                <td className="p-3 text-muted-foreground">{job.retry_count ?? job.retries ?? 0}</td>
+                <td className="p-3 text-muted-foreground font-mono text-xs">
+                  {formatTimestamp(job.scheduled_at ?? job.run_at ?? job.created_at)}
+                </td>
+                <td className="p-3 text-muted-foreground font-mono text-xs">
+                  {formatTimestamp(job.completed_at ?? (job.status?.toLowerCase() === 'completed' ? (job.run_at ?? job.created_at) : null))}
+                </td>
+                <td className="p-3 text-red-400 text-xs max-w-[200px] truncate" title={job.error_message || job.last_error || ''}>
+                  {job.error_message || job.last_error || '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTableCard>
       )}
 
       {/* Tab: Outbox */}
       {activeTab === 'outbox' && (
-        <div className="border rounded-md bg-card">
-          <h2 className="p-4 font-semibold border-b">Outbox Messages</h2>
-          {outboxLoading ? (
-            <div className="p-8 text-center text-muted-foreground">Loading outbox...</div>
-          ) : !outbox?.length ? (
-            <div className="p-8 text-center text-muted-foreground">No outbox messages found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-accent/30">
-                    <th className="text-left p-3 font-medium text-muted-foreground">Channel</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Recipient</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Created</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Sent</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {outbox.map((msg: any) => (
-                    <tr key={msg.id} className="border-b border-border/50 hover:bg-accent/20">
-                      <td className="p-3 font-medium">{msg.channel}</td>
-                      <td className="p-3 text-muted-foreground font-mono text-xs">{msg.recipient}</td>
-                      <td className="p-3">
-                        <StatusBadge status={msg.status} />
-                      </td>
-                      <td className="p-3 text-muted-foreground font-mono text-xs">
-                        {formatTimestamp(msg.created_at)}
-                      </td>
-                      <td className="p-3 text-muted-foreground font-mono text-xs">
-                        {formatTimestamp(msg.sent_at)}
-                      </td>
-                      <td className="p-3 text-red-400 text-xs max-w-[200px] truncate" title={msg.error_message || ''}>
-                        {msg.error_message || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <DataTableCard
+          title="Outbox Messages"
+          loading={outboxLoading}
+          loadingText="Loading outbox..."
+          empty={!outbox?.length}
+          emptyText="No outbox messages found."
+        >
+          <thead>
+            <tr className="border-b bg-accent/30">
+              <th className="text-left p-3 font-medium text-muted-foreground">Channel</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Recipient</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Created</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Sent</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {outbox?.map((msg: OutboxItem) => (
+              <tr key={msg.id} className="border-b border-border/50 hover:bg-accent/20">
+                <td className="p-3 font-medium">{msg.channel}</td>
+                <td className="p-3 text-muted-foreground font-mono text-xs">{msg.recipient || msg.customer_id || '—'}</td>
+                <td className="p-3">
+                  <StatusBadge status={msg.status} />
+                </td>
+                <td className="p-3 text-muted-foreground font-mono text-xs">
+                  {formatTimestamp(msg.created_at)}
+                </td>
+                <td className="p-3 text-muted-foreground font-mono text-xs">
+                  {formatTimestamp(msg.sent_at ?? (msg.status?.toLowerCase() === 'sent' ? msg.run_at : null))}
+                </td>
+                <td className="p-3 text-red-400 text-xs max-w-[200px] truncate" title={msg.error_message || msg.last_error || ''}>
+                  {msg.error_message || msg.last_error || '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTableCard>
       )}
 
       {/* Tab: Audit Trail */}
       {activeTab === 'audit' && (
-        <div className="border rounded-md bg-card">
-          <h2 className="p-4 font-semibold border-b">Audit Trail</h2>
-          {auditLoading ? (
-            <div className="p-8 text-center text-muted-foreground">Loading audit log...</div>
-          ) : !audit?.length ? (
-            <div className="p-8 text-center text-muted-foreground">No audit entries found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-accent/30">
-                    <th className="text-left p-3 font-medium text-muted-foreground">Time</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Actor</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Action</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Entity</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {audit.map((entry: any) => (
-                    <tr key={entry.id} className="border-b border-border/50 hover:bg-accent/20">
-                      <td className="p-3 text-muted-foreground font-mono text-xs whitespace-nowrap">
-                        {formatTimestamp(entry.created_at)}
-                      </td>
-                      <td className="p-3 font-medium">{entry.actor}</td>
-                      <td className="p-3">
-                        <span className="text-xs font-medium px-2 py-1 rounded bg-accent text-foreground">
-                          {entry.action}
-                        </span>
-                      </td>
-                      <td className="p-3 text-muted-foreground text-xs">
-                        {entry.entity_type}
-                        {entry.entity_id ? ` #${entry.entity_id}` : ''}
-                      </td>
-                      <td className="p-3 text-muted-foreground text-xs max-w-[250px] truncate" title={entry.details || ''}>
-                        {entry.details || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <DataTableCard
+          title="Audit Trail"
+          loading={auditLoading}
+          loadingText="Loading audit log..."
+          empty={!audit?.length}
+          emptyText="No audit entries found."
+        >
+          <thead>
+            <tr className="border-b bg-accent/30">
+              <th className="text-left p-3 font-medium text-muted-foreground">Time</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Actor</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Action</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Entity</th>
+              <th className="text-left p-3 font-medium text-muted-foreground">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {audit?.map((entry: AuditItem) => (
+              <tr key={entry.id} className="border-b border-border/50 hover:bg-accent/20">
+                <td className="p-3 text-muted-foreground font-mono text-xs whitespace-nowrap">
+                  {formatTimestamp(entry.created_at ?? entry.performed_at)}
+                </td>
+                <td className="p-3 font-medium">{entry.actor || entry.performed_by || 'system'}</td>
+                <td className="p-3">
+                  <span className="text-xs font-medium px-2 py-1 rounded bg-accent text-foreground">
+                    {entry.action}
+                  </span>
+                </td>
+                <td className="p-3 text-muted-foreground text-xs">
+                  {entry.entity_type
+                    ? `${entry.entity_type}${entry.entity_id ? ` #${entry.entity_id}` : ''}`
+                    : (entry.target_id || entry.entity_id ? `#${entry.target_id || entry.entity_id}` : '—')}
+                </td>
+                <td className="p-3 text-muted-foreground text-xs max-w-[250px] truncate" title={entry.details || entry.reason || ''}>
+                  {entry.details || entry.reason || '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTableCard>
       )}
 
       {/* Tab: Events */}
       {activeTab === 'events' && (
         <div className="space-y-4">
           <div className="flex justify-end">
-            <Button onClick={() => rebuildMutation.mutate({})} className="gap-1.5">
-              <RefreshCw className="h-4 w-4" />
-              Rebuild All Projections
+            <Button
+              onClick={() => rebuildMutation.mutate({})}
+              disabled={rebuildMutation.isPending}
+              className="gap-1.5"
+            >
+              <RefreshCw className={`h-4 w-4 ${rebuildMutation.isPending ? 'animate-spin' : ''}`} />
+              {rebuildMutation.isPending ? 'Rebuilding...' : 'Rebuild All Projections'}
             </Button>
           </div>
 
@@ -381,7 +425,7 @@ export default function Observability() {
               <div className="p-8 text-center text-muted-foreground">No events recorded yet.</div>
             ) : (
               <div className="p-4 space-y-2 h-[600px] overflow-y-auto font-mono text-sm">
-                {events.map((evt: any, i: number) => (
+                {events.map((evt: EventItem, i: number) => (
                   <div key={i} className="flex gap-4 p-2 border-b border-border/50 hover:bg-accent/50">
                     <span className="text-muted-foreground min-w-[150px]">
                       {new Date(evt.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)}
@@ -395,23 +439,6 @@ export default function Observability() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ReliabilityMetric({
-  label,
-  value,
-  warn = false,
-}: {
-  label: string;
-  value: string | number;
-  warn?: boolean;
-}) {
-  return (
-    <div className="border rounded-md bg-card p-4">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className={`text-xl font-bold mt-1 ${warn ? 'text-red-400' : ''}`}>{value}</p>
     </div>
   );
 }

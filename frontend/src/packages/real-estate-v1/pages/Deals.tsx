@@ -4,11 +4,27 @@ import { useData, useMutateData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 
+interface Property {
+  id: string;
+  title?: string;
+  name?: string;
+}
+
+interface Deal {
+  id: string;
+  property_id?: string;
+  property_title?: string;
+  buyer_name?: string;
+  seller_name?: string;
+  status?: string;
+  value?: string | number;
+}
+
 export default function Deals() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   
-  const handleAction = async (endpoint: string, method: string = 'POST', body?: any) => {
+  const handleAction = async (endpoint: string, method: string = 'POST', body?: unknown) => {
     try {
       const res = await fetch(endpoint, { 
         method, 
@@ -17,13 +33,13 @@ export default function Deals() {
       });
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
-        window.location.href = '/login';
+        window.location.assign('/login');
         return;
       }
       if (!res.ok) throw new Error('Request failed');
       toast({ title: 'Success', description: 'Action completed successfully' });
       queryClient.invalidateQueries();
-    } catch (err) {
+    } catch {
       toast({ title: 'Error', description: 'Action failed', variant: 'destructive' });
     }
   };
@@ -32,12 +48,12 @@ export default function Deals() {
   const { data: properties } = useData('/api/realestate/properties');
   const createMutation = useMutateData('/api/realestate/deals', 'Deal created successfully');
   const [showModal, setShowModal] = useState(false);
-  const [formData, setFormData] = useState<any>({ property_id: '', property_title: '', buyer_name: '', seller_name: '', value: '' });
+  const [formData, setFormData] = useState({ property_id: '', property_title: '', buyer_name: '', seller_name: '', value: '' });
 
   const handlePropertyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const propertyId = e.target.value;
-    const propList = properties ? Object.values(properties) : [];
-    const selectedProp: any = propList.find((p: any) => p.id === propertyId);
+    const propList = properties ? (Object.values(properties) as Property[]) : [];
+    const selectedProp = propList.find((p) => p.id === propertyId);
     setFormData({
       ...formData,
       property_id: propertyId,
@@ -62,7 +78,7 @@ export default function Deals() {
         {isLoading ? <div className="p-8 text-center text-muted-foreground">Loading...</div> : (
           !data || Object.keys(data).length === 0 ? <div className="p-8 text-center text-muted-foreground">No records found</div> : (
             <div className="p-4 space-y-4">
-              {Object.values(data).map((item: any, i: number) => (
+              {(Object.values(data) as Deal[]).map((item, i) => (
                 <div key={i} className="flex justify-between items-center p-4 border rounded-lg hover:bg-accent/50 transition-colors">
                   <div>
                     <p className="font-medium text-sm">{item.property_title || item.property_id || item.id}</p>
@@ -106,7 +122,7 @@ export default function Deals() {
                   onChange={handlePropertyChange}
                 >
                   <option value="">-- Select Property --</option>
-                  {properties && Object.values(properties).map((p: any) => (
+                  {properties && (Object.values(properties) as Property[]).map((p) => (
                     <option key={p.id} value={p.id}>{p.title || p.name || p.id}</option>
                   ))}
                 </select>

@@ -37,13 +37,13 @@ export default function Templates() {
       const res = await fetch(`/api/operations/templates/${id}`, { method: 'DELETE' });
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
-        window.location.href = '/login';
+        window.location.assign('/login');
         return;
       }
       if (!res.ok) throw new Error('Delete failed');
       toast({ title: 'Success', description: 'Template deleted' });
       queryClient.invalidateQueries();
-    } catch (err) {
+    } catch {
       toast({ title: 'Error', description: 'Failed to delete template', variant: 'destructive' });
     }
   };
@@ -62,7 +62,7 @@ export default function Templates() {
         <div className="p-8 text-center text-muted-foreground">Loading templates...</div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {templates.map((tmpl: any) => (
+          {(templates as Array<{ id: string; name: string; subject?: string; body?: string }> || []).map((tmpl) => (
             <div key={tmpl.id} className="border rounded-md bg-card p-4 space-y-3 flex flex-col justify-between">
               <div className="space-y-2">
                 <h3 className="font-bold text-sm">{tmpl.name}</h3>

@@ -1,5 +1,6 @@
 const { chromium } = require('@playwright/test');
 const fs = require('fs');
+const path = require('path');
 
 async function run() {
   const browser = await chromium.launch();
@@ -17,12 +18,13 @@ async function run() {
   });
   
   page.on('requestfailed', req => {
-    errors.push(`Request failed: ${req.method()} ${req.url()} - ${req.failure().errorText}`);
+    errors.push(`Request failed: ${req.method()} ${req.url()} - ${req.failure()?.errorText || 'Unknown error'}`);
   });
 
-  console.log('Navigating to http://localhost:8080...');
+  const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+  console.log(`Navigating to ${baseUrl}...`);
   try {
-    await page.goto('http://localhost:8080', { timeout: 10000 });
+    await page.goto(baseUrl, { timeout: 10000 });
     // Wait a bit for React to render and API requests to execute
     await page.waitForTimeout(4000);
     
@@ -36,8 +38,9 @@ async function run() {
       bodyHtml: content.substring(0, 1000) // first 1000 chars of HTML
     };
     
-    fs.writeFileSync('/Users/harshavardhanbk/Desktop/MoatAgeex/e2e/browser_report.json', JSON.stringify(report, null, 2));
-    console.log('Report written successfully.');
+    const reportPath = path.join(__dirname, 'browser_report.json');
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    console.log(`Report written successfully to ${reportPath}.`);
   } catch (err) {
     console.error('Error during navigation:', err);
   } finally {

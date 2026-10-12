@@ -4,11 +4,18 @@ import { useData, useMutateData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 
+interface Property {
+  id: string;
+  title?: string;
+  name?: string;
+  address?: string;
+}
+
 export default function Properties() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   
-  const handleAction = async (endpoint: string, method: string = 'POST', body?: any) => {
+  const handleAction = async (endpoint: string, method: string = 'POST', body?: unknown) => {
     try {
       const res = await fetch(endpoint, { 
         method, 
@@ -17,13 +24,13 @@ export default function Properties() {
       });
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
-        window.location.href = '/login';
+        window.location.assign('/login');
         return;
       }
       if (!res.ok) throw new Error('Request failed');
       toast({ title: 'Success', description: 'Action completed successfully' });
       queryClient.invalidateQueries();
-    } catch (err) {
+    } catch {
       toast({ title: 'Error', description: 'Action failed', variant: 'destructive' });
     }
   };
@@ -32,7 +39,7 @@ export default function Properties() {
   const createMutation = useMutateData('/api/realestate/properties', 'Property created successfully');
   const [showModal, setShowModal] = useState(false);
   const [formData, setFormData] = useState({ title: '', address: '' });
-  const [selectedProperty, setSelectedProperty] = useState<any>(null);
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
 
   return (
     <div className="space-y-6">
@@ -48,7 +55,7 @@ export default function Properties() {
         {isLoading ? <div className="p-8 text-center text-muted-foreground">Loading...</div> : (
           !data || Object.keys(data).length === 0 ? <div className="p-8 text-center text-muted-foreground">No properties found</div> : (
             <div className="p-4 space-y-4">
-              {Object.values(data).map((item: any, i: number) => (
+              {(Object.values(data) as Property[]).map((item, i) => (
                 <div key={i} className="flex justify-between items-center p-4 border rounded-lg hover:bg-accent/50 transition-colors">
                   <div>
                     <p className="font-medium text-sm">{item.title || item.name || item.id}</p>

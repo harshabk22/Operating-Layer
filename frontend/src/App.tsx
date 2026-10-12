@@ -18,10 +18,22 @@ import { useData } from './lib/api';
 import { componentMap } from './packages/registry';
 import { WifiOff } from 'lucide-react';
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+
+interface PackageRoute {
+  path: string;
+  component: string;
+}
+
+interface InstalledPackage {
+  id: string;
+  routes?: PackageRoute[];
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: (failureCount, error: any) => {
+      retry: (failureCount, error: Error) => {
         // Do not retry on authentication errors or after 1 failure
         if (error?.message === 'Unauthorized' || failureCount >= 1) {
           return false;
@@ -34,7 +46,14 @@ const queryClient = new QueryClient({
 });
 
 function DynamicRoutesWrapper() {
-  const { data: installedPackages, isLoading, error, refetch } = useData('/api/platform/packages');
+  const isAuthenticated = Boolean(localStorage.getItem('auth'));
+  const { data: installedPackages, isLoading, error, refetch } = useData('/api/platform/packages', {
+    enabled: isAuthenticated,
+  });
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
 
   if (isLoading) {
     return (
@@ -64,8 +83,8 @@ function DynamicRoutesWrapper() {
     );
   }
 
-  const dynamicRoutes = (installedPackages || []).flatMap((pkg: any) => 
-    (pkg.routes || []).map((route: any) => {
+  const dynamicRoutes = ((installedPackages as InstalledPackage[]) || []).flatMap((pkg) => 
+    (pkg.routes || []).map((route) => {
       const Component = componentMap[route.component];
       if (!Component) return null;
       return (
@@ -105,10 +124,12 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="*" element={<DynamicRoutesWrapper />} />
-        </Routes>
+        <ErrorBoundary fallbackTitle="Platform Error">
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="*" element={<DynamicRoutesWrapper />} />
+          </Routes>
+        </ErrorBoundary>
       </BrowserRouter>
       <Toaster />
     </QueryClientProvider>

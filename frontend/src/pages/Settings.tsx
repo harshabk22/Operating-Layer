@@ -21,36 +21,37 @@ import {
 
 type Tab = 'general' | 'ai' | 'integrations';
 
+interface AIModelConfig {
+  key: 'chatModel' | 'plannerModel' | 'workerModel';
+  label: string;
+  desc: string;
+}
+
+const AI_MODEL_FIELDS: AIModelConfig[] = [
+  { key: 'chatModel', label: 'Chat Model', desc: 'Model used for conversational responses.' },
+  { key: 'plannerModel', label: 'Planner Model', desc: 'Model used for planning multi-step workflows.' },
+  { key: 'workerModel', label: 'Worker Model', desc: 'Model used for executing individual tasks.' },
+];
+
 export default function Settings() {
   const { toast } = useToast();
   const { data: settings, isLoading } = useData('/api/system/settings');
-
   const [activeTab, setActiveTab] = useState<Tab>('general');
+  const [isSaving, setIsSaving] = useState(false);
 
-  // General tab state
-  const [tenantName, setTenantName] = useState('');
+  // Form field state overrides (falls back to loaded settings without cascading useEffect setState)
+  const [formOverrides, setFormOverrides] = useState<Record<string, string>>({});
   const [theme, setTheme] = useState(() =>
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   );
 
-  // AI Provider tab state
-  const [provider, setProvider] = useState('google');
-  const [chatModel, setChatModel] = useState('');
-  const [plannerModel, setPlannerModel] = useState('');
-  const [workerModel, setWorkerModel] = useState('');
+  const tenantName = formOverrides.tenantName ?? settings?.tenant_name ?? '';
+  const provider = formOverrides.provider ?? settings?.provider ?? 'google';
+  const chatModel = formOverrides.chatModel ?? settings?.chat_model ?? '';
+  const plannerModel = formOverrides.plannerModel ?? settings?.planner_model ?? '';
+  const workerModel = formOverrides.workerModel ?? settings?.worker_model ?? '';
 
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Populate form state when API data loads
-  useEffect(() => {
-    if (settings) {
-      setTenantName(settings.tenant_name || '');
-      setProvider(settings.provider || 'google');
-      setChatModel(settings.chat_model || '');
-      setPlannerModel(settings.planner_model || '');
-      setWorkerModel(settings.worker_model || '');
-    }
-  }, [settings]);
+  const modelValues = { chatModel, plannerModel, workerModel };
 
   // Apply theme to DOM and localStorage
   useEffect(() => {
@@ -89,6 +90,13 @@ export default function Settings() {
     return <div className="p-8 text-center text-muted-foreground">Loading settings...</div>;
   }
 
+  const integrations = [
+    { icon: <Calendar className="h-5 w-5 text-blue-500" />, title: 'Google Calendar', description: 'Sync calendar events and manage bookings.', connected: settings?.has_google ?? false },
+    { icon: <Phone className="h-5 w-5 text-green-500" />, title: 'WhatsApp', description: 'Receive and send WhatsApp messages.', connected: settings?.has_whatsapp ?? false },
+    { icon: <Send className="h-5 w-5 text-sky-500" />, title: 'Telegram', description: 'Connect a Telegram bot for messaging.', connected: settings?.has_telegram ?? false },
+    { icon: <Sheet className="h-5 w-5 text-emerald-500" />, title: 'Google Sheets', description: 'Sync data to and from Google Sheets.', connected: settings?.has_google ?? false },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
@@ -125,7 +133,7 @@ export default function Settings() {
               <input
                 className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 value={tenantName}
-                onChange={(e) => setTenantName(e.target.value)}
+                onChange={(e) => setFormOverrides(prev => ({ ...prev, tenantName: e.target.value }))}
                 placeholder="Enter tenant name"
               />
             </div>
@@ -133,28 +141,20 @@ export default function Settings() {
             <div className="space-y-2">
               <label className="text-sm font-medium">Display Theme</label>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setTheme('light')}
-                  className={`flex-1 flex items-center justify-center gap-2 p-3 border rounded-md text-sm font-medium transition-colors ${
-                    theme === 'light'
-                      ? 'border-primary bg-primary/5 text-primary'
-                      : 'border-border bg-background text-muted-foreground hover:bg-accent'
-                  }`}
-                >
-                  <Sun className="h-4 w-4" />
-                  Light
-                </button>
-                <button
-                  onClick={() => setTheme('dark')}
-                  className={`flex-1 flex items-center justify-center gap-2 p-3 border rounded-md text-sm font-medium transition-colors ${
-                    theme === 'dark'
-                      ? 'border-primary bg-primary/5 text-primary'
-                      : 'border-border bg-background text-muted-foreground hover:bg-accent'
-                  }`}
-                >
-                  <Moon className="h-4 w-4" />
-                  Dark
-                </button>
+                {(['light', 'dark'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTheme(t)}
+                    className={`flex-1 flex items-center justify-center gap-2 p-3 border rounded-md text-sm font-medium capitalize transition-colors ${
+                      theme === t
+                        ? 'border-primary bg-primary/5 text-primary'
+                        : 'border-border bg-background text-muted-foreground hover:bg-accent'
+                    }`}
+                  >
+                    {t === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                    {t}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -173,30 +173,20 @@ export default function Settings() {
                 System Statistics
               </h2>
               <div className="grid gap-4 md:grid-cols-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Total Threads</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{settings.stats.total_threads ?? 0}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Contacts</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{settings.stats.contacts ?? 0}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Events</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{settings.stats.events ?? 0}</div>
-                  </CardContent>
-                </Card>
+                {[
+                  { title: 'Total Threads', value: settings.stats.total_threads ?? 0 },
+                  { title: 'Contacts', value: settings.stats.contacts ?? 0 },
+                  { title: 'Events', value: settings.stats.events ?? 0 },
+                ].map((stat) => (
+                  <Card key={stat.title}>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{stat.value}</div>
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
             </div>
           )}
@@ -212,51 +202,25 @@ export default function Settings() {
               <select
                 className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 value={provider}
-                onChange={(e) => setProvider(e.target.value)}
+                onChange={(e) => setFormOverrides(prev => ({ ...prev, provider: e.target.value }))}
               >
                 <option value="google">Google (Gemini)</option>
                 <option value="deepseek">DeepSeek</option>
               </select>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Chat Model</label>
-              <input
-                className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                value={chatModel}
-                onChange={(e) => setChatModel(e.target.value)}
-                placeholder="e.g. gemini-2.0-flash"
-              />
-              <p className="text-xs text-muted-foreground">
-                Model used for conversational responses.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Planner Model</label>
-              <input
-                className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                value={plannerModel}
-                onChange={(e) => setPlannerModel(e.target.value)}
-                placeholder="e.g. gemini-2.0-flash"
-              />
-              <p className="text-xs text-muted-foreground">
-                Model used for planning multi-step workflows.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Worker Model</label>
-              <input
-                className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                value={workerModel}
-                onChange={(e) => setWorkerModel(e.target.value)}
-                placeholder="e.g. gemini-2.0-flash"
-              />
-              <p className="text-xs text-muted-foreground">
-                Model used for executing individual tasks.
-              </p>
-            </div>
+            {AI_MODEL_FIELDS.map(({ key, label, desc }) => (
+              <div key={key} className="space-y-2">
+                <label className="text-sm font-medium">{label}</label>
+                <input
+                  className="w-full p-2 border rounded-md bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={modelValues[key]}
+                  onChange={(e) => setFormOverrides(prev => ({ ...prev, [key]: e.target.value }))}
+                  placeholder="e.g. gemini-2.0-flash"
+                />
+                <p className="text-xs text-muted-foreground">{desc}</p>
+              </div>
+            ))}
 
             <Button
               onClick={() =>
@@ -279,30 +243,15 @@ export default function Settings() {
       {activeTab === 'integrations' && (
         <div className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
-            <IntegrationCard
-              icon={<Calendar className="h-5 w-5 text-blue-500" />}
-              title="Google Calendar"
-              description="Sync calendar events and manage bookings."
-              connected={settings?.has_google ?? false}
-            />
-            <IntegrationCard
-              icon={<Phone className="h-5 w-5 text-green-500" />}
-              title="WhatsApp"
-              description="Receive and send WhatsApp messages."
-              connected={settings?.has_whatsapp ?? false}
-            />
-            <IntegrationCard
-              icon={<Send className="h-5 w-5 text-sky-500" />}
-              title="Telegram"
-              description="Connect a Telegram bot for messaging."
-              connected={settings?.has_telegram ?? false}
-            />
-            <IntegrationCard
-              icon={<Sheet className="h-5 w-5 text-emerald-500" />}
-              title="Google Sheets"
-              description="Sync data to and from Google Sheets."
-              connected={settings?.has_google ?? false}
-            />
+            {integrations.map((item) => (
+              <IntegrationCard
+                key={item.title}
+                icon={item.icon}
+                title={item.title}
+                description={item.description}
+                connected={item.connected}
+              />
+            ))}
           </div>
 
           <div className="border rounded-md bg-card p-4 flex items-center justify-between">

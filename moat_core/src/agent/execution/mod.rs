@@ -51,18 +51,21 @@ impl DelExecutor {
     }
 
     fn load_policy() -> Gate2Policy {
-        let candidates: Vec<std::path::PathBuf> = vec![
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut candidates: Vec<std::path::PathBuf> = vec![
             dirs::home_dir()
                 .unwrap_or_default()
                 .join(".ageex")
                 .join("policy.toml"),
+            cwd.join("moat_core").join("policies").join("default.toml"),
+            cwd.join("policies").join("default.toml"),
             std::path::PathBuf::from("moat_core/policies/default.toml"),
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join("moat_core")
-                .join("policies")
-                .join("default.toml"),
+            std::path::PathBuf::from("policies/default.toml"),
         ];
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("moat_core").join("policies").join("default.toml"));
+            candidates.push(parent.join("policies").join("default.toml"));
+        }
         for path in &candidates {
             if path.exists() {
                 eprintln!("[DEL] Loading policy from {:?}", path);

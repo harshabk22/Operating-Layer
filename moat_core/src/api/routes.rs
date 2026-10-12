@@ -138,25 +138,49 @@ pub async fn login_handler(
     let owner_pw = std::env::var("OWNER_PASSWORD").unwrap_or_else(|_| "admin".to_string());
     let operator_pw = std::env::var("OPERATOR_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
-    let role =
+    let (role, business_id) =
         if payload.username == "owner" && (payload.password == owner_pw || payload.password == "admin") && !owner_pw.is_empty() {
-            UserRole::Owner
+            (UserRole::Owner, "default_business".to_string())
         } else if payload.username == "operator"
             && (payload.password == operator_pw || payload.password == "admin")
             && !operator_pw.is_empty()
         {
-            UserRole::Operator
+            (UserRole::Operator, "default_business".to_string())
         } else if payload.username == "viewer" {
-            UserRole::Viewer
+            (UserRole::Viewer, "default_business".to_string())
         } else {
-            return Err(StatusCode::UNAUTHORIZED);
+            let conn = state.runtime.db.lock().await;
+            let row: Option<(String, String, Option<String>)> = conn.query_row(
+                "SELECT p.id, p.business_id, (SELECT payload FROM business_event_store WHERE aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1)
+                 FROM projections p WHERE p.id = ?1 AND p.name IN ('UserCreated', 'UserUpdated')",
+                [&payload.username],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2).unwrap_or(None)))
+            ).ok();
+
+            if let Some((_, b_id, payload_opt)) = row {
+                let mut resolved_role = UserRole::Viewer;
+                if let Some(p) = payload_opt {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                        if let Some(r) = parsed.get("role").and_then(|v| v.as_str()) {
+                            match r.to_lowercase().as_str() {
+                                "owner" => resolved_role = UserRole::Owner,
+                                "operator" => resolved_role = UserRole::Operator,
+                                _ => resolved_role = UserRole::Viewer,
+                            }
+                        }
+                    }
+                }
+                (resolved_role, b_id)
+            } else {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
         };
 
     let session_id = Uuid::new_v4().to_string();
     let session = UserSession {
         username: payload.username.clone(),
         role: role.clone(),
-        business_id: "default_business".to_string(),
+        business_id,
     };
     state
         .auth_store
@@ -517,7 +541,10 @@ pub(crate) async fn dispatch_event(state: &ApiState, business_id: &str, event_ty
     let payload_str = payload_clone.to_string();
     let conn = state.runtime.db.lock().await;
     let id = Uuid::new_v4().to_string();
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_else(|_| chrono::Utc::now().timestamp_millis());
     
     conn.execute(
         "INSERT INTO business_event_store (id, business_id, event_type, aggregate_id, payload, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -537,11 +564,14 @@ use crate::package::PackageManifest;
 
 pub fn read_package_manifest(pkg_id: &str) -> Option<PackageManifest> {
     let cwd = std::env::current_dir().ok()?;
-    // Try moat_core/packages/ first, then packages/
-    let paths = [
+    let mut paths = vec![
         cwd.join("moat_core").join("packages").join(pkg_id).join("package.yaml"),
         cwd.join("packages").join(pkg_id).join("package.yaml"),
     ];
+    if let Some(parent) = cwd.parent() {
+        paths.push(parent.join("moat_core").join("packages").join(pkg_id).join("package.yaml"));
+        paths.push(parent.join("packages").join(pkg_id).join("package.yaml"));
+    }
     for path in &paths {
         if let Ok(content) = std::fs::read_to_string(path) {
             return serde_yaml::from_str(&content).ok();
@@ -610,7 +640,7 @@ pub async fn register_package_core(manifest: &PackageManifest, meta_brain: &toki
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if let Ok(content) = std::fs::read_to_string(&path) {
-                            let wf_name = path.file_stem().unwrap().to_string_lossy().into_owned();
+                            let wf_name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                             let node = crate::memory::meta_brain::NodeData {
                                 id: 0,
                                 kind: crate::memory::meta_brain::NodeKind::Workflow,
@@ -634,6 +664,25 @@ pub async fn register_package_in_memory(manifest: &PackageManifest, state: &ApiS
 }
 
 pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &ApiState) {
+    // 1. Fetch other installed packages safely without holding locks across await
+    let other_manifests: Vec<PackageManifest> = {
+        let conn = state.runtime.db.lock().await;
+        let mut manifests = Vec::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT p.id FROM projections p WHERE p.name = 'PackageInstalled'") {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for other_id in rows.flatten() {
+                    if other_id != manifest.id {
+                        if let Some(m) = read_package_manifest(&other_id) {
+                            manifests.push(m);
+                        }
+                    }
+                }
+            }
+        }
+        manifests
+    };
+
+    // 2. Re-register tools in global registry
     {
         let mut registry = crate::agent::tools::global_registry().write().unwrap();
         *registry = crate::agent::tools::ToolRegistry::new();
@@ -645,31 +694,21 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
         registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "operator:escalate", description: "Escalate the conversation thread to a human operator.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
         registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "knowledge:query", description: "Query the organizational knowledge base. Use when you need info to answer customer questions.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
         registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::SimpleTool { name: "done", description: "Signal task completion and provide the final response to the user.", reversibility: crate::agent::tools::ToolReversibility::Reversible }));
-    }
 
-    if let Ok(conn) = state.runtime.db.try_lock() {
-        if let Ok(mut stmt) = conn.prepare("SELECT p.id FROM projections p WHERE p.name = 'PackageInstalled'") {
-            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                for other_id in rows.flatten() {
-                    if other_id != manifest.id {
-                        if let Some(other_manifest) = read_package_manifest(&other_id) {
-                            let mut registry = crate::agent::tools::global_registry().write().unwrap();
-                            for tool_name in &other_manifest.tools {
-                                let static_name: &'static str = Box::leak(tool_name.clone().into_boxed_str());
-                                let static_desc: &'static str = Box::leak(format!("Dynamic tool: {}", tool_name).into_boxed_str());
-                                registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::DynamicPackageTool {
-                                    name: static_name,
-                                    description: static_desc,
-                                    reversibility: crate::agent::tools::ToolReversibility::Reversible,
-                                }));
-                            }
-                        }
-                    }
-                }
+        for other_manifest in &other_manifests {
+            for tool_name in &other_manifest.tools {
+                let static_name: &'static str = Box::leak(tool_name.clone().into_boxed_str());
+                let static_desc: &'static str = Box::leak(format!("Dynamic tool: {}", tool_name).into_boxed_str());
+                registry.register(crate::agent::tools::ToolEntry::new(crate::agent::tools::DynamicPackageTool {
+                    name: static_name,
+                    description: static_desc,
+                    reversibility: crate::agent::tools::ToolReversibility::Reversible,
+                }));
             }
         }
     }
 
+    // 3. Reset and rebuild meta brain
     {
         let mut brain = state.runtime.ai_agent.meta_brain.write().await;
         *brain = crate::memory::meta_brain::MetaBrain::new();
@@ -686,7 +725,7 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
                             if path.extension().map(|e| e == "md").unwrap_or(false) {
                                 if let Ok(content) = std::fs::read_to_string(&path) {
                                     if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
-                                        let skill_json = serde_json::to_string(&skill_def).unwrap();
+                                        let skill_json = serde_json::to_string(&skill_def).unwrap_or_default();
                                         let node = crate::memory::meta_brain::NodeData {
                                             id: 0,
                                             kind: crate::memory::meta_brain::NodeKind::Skill,
@@ -704,72 +743,61 @@ pub async fn unregister_package_in_memory(manifest: &PackageManifest, state: &Ap
                     }
                 }
             }
-        }
 
-        if let Ok(conn) = state.runtime.db.try_lock() {
-            if let Ok(mut stmt) = conn.prepare("SELECT p.id FROM projections p WHERE p.name = 'PackageInstalled'") {
-                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                    for other_id in rows.flatten() {
-                        if other_id != manifest.id {
-                            if let Some(other_manifest) = read_package_manifest(&other_id) {
-                                for perm in &other_manifest.permissions {
-                                    let _ = brain.grant_tool_permission(perm, crate::memory::meta_brain::PermissionFlags(1));
-                                }
+            for other_manifest in &other_manifests {
+                for perm in &other_manifest.permissions {
+                    let _ = brain.grant_tool_permission(perm, crate::memory::meta_brain::PermissionFlags(1));
+                }
 
-                                if let Ok(curr_dir) = std::env::current_dir() {
-                                    let pkg_dir = if curr_dir.join("moat_core").join("packages").join(&other_id).exists() {
-                                        curr_dir.join("moat_core").join("packages").join(&other_id)
-                                    } else {
-                                        curr_dir.join("packages").join(&other_id)
-                                    };
-                                    let pkg_skills_dir = pkg_dir.join("skills");
-                                    if pkg_skills_dir.exists() {
-                                        if let Ok(entries) = std::fs::read_dir(pkg_skills_dir) {
-                                            for entry in entries.flatten() {
-                                                let path = entry.path();
-                                                if path.extension().map(|e| e == "md").unwrap_or(false) {
-                                                    if let Ok(content) = std::fs::read_to_string(&path) {
-                                                        if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
-                                                            let skill_json = serde_json::to_string(&skill_def).unwrap();
-                                                            let node = crate::memory::meta_brain::NodeData {
-                                                                id: 0,
-                                                                kind: crate::memory::meta_brain::NodeKind::Skill,
-                                                                key: format!("skill:static:{}", skill_def.name),
-                                                                label: skill_def.name.clone(),
-                                                                resource: skill_json,
-                                                                permissions: crate::memory::meta_brain::PermissionFlags(0),
-                                                                active: true,
-                                                            };
-                                                            brain.add_node(node);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    let pkg_workflows_dir = pkg_dir.join("workflows");
-                                    if pkg_workflows_dir.exists() {
-                                        if let Ok(entries) = std::fs::read_dir(pkg_workflows_dir) {
-                                            for entry in entries.flatten() {
-                                                let path = entry.path();
-                                                if let Ok(content) = std::fs::read_to_string(&path) {
-                                                    let wf_name = path.file_stem().unwrap().to_string_lossy().into_owned();
-                                                    let node = crate::memory::meta_brain::NodeData {
-                                                        id: 0,
-                                                        kind: crate::memory::meta_brain::NodeKind::Workflow,
-                                                        key: format!("workflow:{}", wf_name),
-                                                        label: wf_name.clone(),
-                                                        resource: content,
-                                                        permissions: crate::memory::meta_brain::PermissionFlags(0),
-                                                        active: true,
-                                                    };
-                                                    brain.add_node(node);
-                                                }
-                                            }
-                                        }
+                let other_id = &other_manifest.id;
+                let pkg_dir = if curr_dir.join("moat_core").join("packages").join(other_id).exists() {
+                    curr_dir.join("moat_core").join("packages").join(other_id)
+                } else {
+                    curr_dir.join("packages").join(other_id)
+                };
+                let pkg_skills_dir = pkg_dir.join("skills");
+                if pkg_skills_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(pkg_skills_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().map(|e| e == "md").unwrap_or(false) {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if let Some(skill_def) = crate::memory::skills::parse_skill_file(&content) {
+                                        let skill_json = serde_json::to_string(&skill_def).unwrap_or_default();
+                                        let node = crate::memory::meta_brain::NodeData {
+                                            id: 0,
+                                            kind: crate::memory::meta_brain::NodeKind::Skill,
+                                            key: format!("skill:static:{}", skill_def.name),
+                                            label: skill_def.name.clone(),
+                                            resource: skill_json,
+                                            permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                            active: true,
+                                        };
+                                        brain.add_node(node);
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                let pkg_workflows_dir = pkg_dir.join("workflows");
+                if pkg_workflows_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(pkg_workflows_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                let wf_name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                                let node = crate::memory::meta_brain::NodeData {
+                                    id: 0,
+                                    kind: crate::memory::meta_brain::NodeKind::Workflow,
+                                    key: format!("workflow:{}", wf_name),
+                                    label: wf_name.clone(),
+                                    resource: content,
+                                    permissions: crate::memory::meta_brain::PermissionFlags(0),
+                                    active: true,
+                                };
+                                brain.add_node(node);
                             }
                         }
                     }
@@ -802,7 +830,8 @@ pub async fn install_package_handler(State(state): State<ApiState>, Extension(se
 }
 
 pub async fn deploy_tenant_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let tenant_id = payload.get("tenantId").and_then(|v| v.as_str()).unwrap_or("tenant_1");
+    let fallback_id = format!("tenant_{}", Uuid::new_v4());
+    let tenant_id = payload.get("tenantId").or_else(|| payload.get("id")).and_then(|v| v.as_str()).unwrap_or(&fallback_id);
     dispatch_event(&state, &session.business_id, "TenantDeployed", tenant_id, &payload).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Tenant deployed successfully" })))
 }
@@ -880,7 +909,7 @@ pub async fn rbac_guard_handler(axum::extract::Query(params): axum::extract::Que
 
 pub async fn get_dashboard_kpis_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>) -> Result<impl IntoResponse, StatusCode> {
     let conn = state.runtime.db.lock().await;
-    let leads: i64 = conn.query_row("SELECT count(*) FROM projections WHERE business_id = ? AND name = 'LeadCreated'", [&session.business_id], |r| r.get(0)).unwrap_or(0);
+    let leads: i64 = conn.query_row("SELECT count(*) FROM projections WHERE business_id = ? AND name IN ('LeadCreated', 'LeadUpdated', 'LeadQualified')", [&session.business_id], |r| r.get(0)).unwrap_or(0);
     let sales: i64 = conn.query_row("SELECT count(*) FROM projections WHERE business_id = ? AND name = 'DealWon'", [&session.business_id], |r| r.get(0)).unwrap_or(0);
     
     // Sum actual deal values from event store
@@ -990,18 +1019,23 @@ pub async fn qualify_lead_handler(State(state): State<ApiState>, Extension(sessi
 
     let mut lead_name = id.clone();
     let mut lead_email = "".to_string();
+    let mut qual_payload = serde_json::json!({ "status": "qualified" });
     if let Some(p) = payload_str {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+        if let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&p) {
             if let Some(n) = parsed.get("name").and_then(|v| v.as_str()) {
                 lead_name = n.to_string();
             }
             if let Some(e) = parsed.get("email").and_then(|v| v.as_str()) {
                 lead_email = e.to_string();
             }
+            if let Some(obj) = parsed.as_object_mut() {
+                obj.insert("status".to_string(), serde_json::Value::String("qualified".to_string()));
+            }
+            qual_payload = parsed;
         }
     }
 
-    dispatch_event(&state, &session.business_id, "LeadQualified", &id, &serde_json::json!({})).await?;
+    dispatch_event(&state, &session.business_id, "LeadQualified", &id, &qual_payload).await?;
 
     let opp_id = format!("opp_{}", id);
     let opp_payload = serde_json::json!({
@@ -1082,6 +1116,8 @@ pub async fn update_opportunity_handler(State(state): State<ApiState>, Extension
     let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
     drop(conn);
 
+    let prev_stage = merged.get("stage").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
     if let Some(obj) = merged.as_object_mut() {
         if let Some(update_obj) = payload.as_object() {
             for (k, v) in update_obj {
@@ -1091,7 +1127,7 @@ pub async fn update_opportunity_handler(State(state): State<ApiState>, Extension
     }
 
     let stage = payload.get("stage").and_then(|v| v.as_str()).unwrap_or("");
-    if stage == "won" {
+    if stage == "won" && prev_stage != "won" {
         let amount = merged.get("amount").and_then(|v| {
             if let Some(f) = v.as_f64() {
                 Some(f)
@@ -1275,6 +1311,8 @@ pub async fn update_deal_handler(State(state): State<ApiState>, Extension(sessio
     let mut merged = get_latest_payload(&conn, &session.business_id, &id).unwrap_or_else(|| serde_json::json!({}));
     drop(conn);
 
+    let prev_status = merged.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
     if let Some(obj) = merged.as_object_mut() {
         if let Some(update_obj) = payload.as_object() {
             for (k, v) in update_obj {
@@ -1284,7 +1322,7 @@ pub async fn update_deal_handler(State(state): State<ApiState>, Extension(sessio
     }
 
     let status = payload.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "finalised" {
+    if status == "finalised" && prev_status != "finalised" {
         let value = merged.get("value").and_then(|v| {
             if let Some(f) = v.as_f64() {
                 Some(f)
@@ -1316,7 +1354,7 @@ pub async fn delete_package_handler(State(state): State<ApiState>, Extension(ses
         unregister_package_in_memory(&manifest, &state).await;
     }
     let conn = state.runtime.db.lock().await;
-    let _ = conn.execute("DELETE FROM projections WHERE business_id = ?1 AND name = 'PackageInstalled' AND id = ?2", params![&session.business_id, &id]);
+    let _ = conn.execute("DELETE FROM projections WHERE business_id = ?1 AND id = ?2", params![&session.business_id, &id]);
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Package deleted" })))
 }
 pub async fn upgrade_package_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
@@ -1361,7 +1399,8 @@ pub async fn delete_tenant_handler(State(state): State<ApiState>, Extension(sess
 }
 
 pub async fn create_template_handler(State(state): State<ApiState>, Extension(session): Extension<UserSession>, axum::Json(payload): axum::Json<serde_json::Value>) -> Result<impl IntoResponse, StatusCode> {
-    let template_id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("tmpl_1");
+    let fallback_id = format!("tmpl_{}", Uuid::new_v4());
+    let template_id = payload.get("id").and_then(|v| v.as_str()).unwrap_or(&fallback_id);
     dispatch_event(&state, &session.business_id, "NotificationTemplateCreated", template_id, &payload).await?;
     Ok(axum::Json(serde_json::json!({ "status": "success", "message": "Template created successfully" })))
 }
@@ -1554,13 +1593,19 @@ pub async fn list_jobs_handler(
     ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let rows = stmt.query_map([], |row| {
+        let retries: i64 = row.get(3)?;
+        let run_at: i64 = row.get(4)?;
+        let last_error: Option<String> = row.get(5)?;
         Ok(serde_json::json!({
             "id": row.get::<_, String>(0)?,
             "job_type": row.get::<_, String>(1)?,
             "status": row.get::<_, String>(2)?,
-            "retries": row.get::<_, i64>(3)?,
-            "run_at": row.get::<_, i64>(4)?,
-            "last_error": row.get::<_, Option<String>>(5)?,
+            "retries": retries,
+            "retry_count": retries,
+            "run_at": run_at,
+            "scheduled_at": run_at,
+            "last_error": last_error.clone(),
+            "error_message": last_error,
             "created_at": row.get::<_, i64>(6)?
         }))
     }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1583,15 +1628,21 @@ pub async fn list_outbox_handler(
     ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let rows = stmt.query_map([&session.business_id], |row| {
+        let customer_id: String = row.get(2)?;
+        let run_at: i64 = row.get(6)?;
+        let last_error: Option<String> = row.get(7)?;
         Ok(serde_json::json!({
             "id": row.get::<_, String>(0)?,
             "channel": row.get::<_, String>(1)?,
-            "customer_id": row.get::<_, String>(2)?,
+            "customer_id": customer_id.clone(),
+            "recipient": customer_id,
             "direction": row.get::<_, String>(3)?,
             "body": row.get::<_, String>(4)?,
             "status": row.get::<_, String>(5)?,
-            "run_at": row.get::<_, i64>(6)?,
-            "last_error": row.get::<_, Option<String>>(7)?,
+            "run_at": run_at,
+            "sent_at": run_at,
+            "last_error": last_error.clone(),
+            "error_message": last_error,
             "created_at": row.get::<_, i64>(8)?
         }))
     }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -1613,13 +1664,21 @@ pub async fn list_audit_handler(
     ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let rows = stmt.query_map([], |row| {
+        let target_id: String = row.get(2)?;
+        let performed_by: String = row.get(3)?;
+        let performed_at: i64 = row.get(4)?;
+        let reason: Option<String> = row.get(5)?;
         Ok(serde_json::json!({
             "id": row.get::<_, String>(0)?,
             "action": row.get::<_, String>(1)?,
-            "target_id": row.get::<_, String>(2)?,
-            "performed_by": row.get::<_, String>(3)?,
-            "performed_at": row.get::<_, i64>(4)?,
-            "reason": row.get::<_, Option<String>>(5)?
+            "target_id": target_id.clone(),
+            "entity_id": target_id,
+            "performed_by": performed_by.clone(),
+            "actor": performed_by,
+            "performed_at": performed_at,
+            "created_at": performed_at,
+            "reason": reason.clone(),
+            "details": reason
         }))
     }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -1627,3 +1686,140 @@ pub async fn list_audit_handler(
     for v in rows.flatten() { results.push(v); }
     Ok(Json(results))
 }
+
+// --- Platform Users Handlers ---
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub role: String,
+    pub email: String,
+    pub status: Option<String>,
+}
+
+pub async fn list_users_handler(
+    State(state): State<ApiState>,
+    Extension(session): Extension<UserSession>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let business_id = if session.business_id.is_empty() {
+        "default_business"
+    } else {
+        &session.business_id
+    };
+
+    let conn = state.runtime.db.lock().await;
+    let mut stmt = conn.prepare(
+        "SELECT p.id, 
+         (SELECT payload FROM business_event_store WHERE business_id = ?1 AND aggregate_id = p.id ORDER BY timestamp DESC LIMIT 1) as payload 
+         FROM projections p WHERE p.business_id = ?1 AND p.name IN ('UserCreated', 'UserUpdated')"
+    ).map_err(|e| {
+        eprintln!("[list_users_handler] prepare failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let rows = stmt.query_map([business_id], |row| {
+        let user_id: String = row.get(0)?;
+        let payload_str: Option<String> = row.get(1).unwrap_or(None);
+        let mut user_obj = serde_json::json!({
+            "username": user_id,
+            "role": "Viewer",
+            "email": "",
+            "status": "active"
+        });
+        if let Some(p) = payload_str {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&p) {
+                if let serde_json::Value::Object(map) = parsed {
+                    for (k, v) in map {
+                        user_obj[k] = v;
+                    }
+                }
+            }
+        }
+        if user_obj.get("username").is_none() || user_obj["username"].as_str().unwrap_or("").is_empty() {
+            user_obj["username"] = serde_json::Value::String(user_id);
+        }
+        Ok(user_obj)
+    }).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut user_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    let defaults = vec![
+        serde_json::json!({
+            "username": "owner",
+            "role": "Owner",
+            "email": "owner@moatageex.io",
+            "status": "active"
+        }),
+        serde_json::json!({
+            "username": "operator",
+            "role": "Operator",
+            "email": "operator@moatageex.io",
+            "status": "active"
+        }),
+        serde_json::json!({
+            "username": "viewer",
+            "role": "Viewer",
+            "email": "viewer@moatageex.io",
+            "status": "active"
+        }),
+    ];
+
+    for u in defaults {
+        let username = u["username"].as_str().unwrap().to_string();
+        order.push(username.clone());
+        user_map.insert(username, u);
+    }
+
+    for row_res in rows {
+        if let Ok(user) = row_res {
+            if let Some(uname) = user.get("username").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                if !user_map.contains_key(&uname) {
+                    order.push(uname.clone());
+                }
+                user_map.insert(uname, user);
+            }
+        }
+    }
+
+    let results: Vec<serde_json::Value> = order.into_iter().filter_map(|uname| user_map.remove(&uname)).collect();
+    Ok(Json(results))
+}
+
+pub async fn create_user_handler(
+    State(state): State<ApiState>,
+    Extension(session): Extension<UserSession>,
+    Json(payload): Json<CreateUserRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let username = payload.username.trim();
+    if username.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let role = if payload.role.trim().is_empty() {
+        "Viewer"
+    } else {
+        payload.role.trim()
+    };
+    let email = payload.email.trim();
+    let status = payload.status.as_deref().unwrap_or("active").trim();
+    let status_str = if status.is_empty() { "active" } else { status };
+
+    let user_obj = serde_json::json!({
+        "username": username,
+        "role": role,
+        "email": email,
+        "status": status_str,
+    });
+
+    let business_id = if session.business_id.is_empty() {
+        "default_business"
+    } else {
+        &session.business_id
+    };
+
+    dispatch_event(&state, business_id, "UserCreated", username, &user_obj).await?;
+
+    Ok(Json(user_obj))
+}
+

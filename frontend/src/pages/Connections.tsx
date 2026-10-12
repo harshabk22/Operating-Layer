@@ -24,13 +24,24 @@ interface WhatsAppStatus {
   retry_settings?: string;
 }
 
+interface GoogleCalendarItem {
+  id: string;
+  summary?: string;
+}
+
+interface GoogleSpreadsheetItem {
+  id: string;
+  name?: string;
+  summary?: string;
+}
+
 export default function Connections() {
   const { toast } = useToast();
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus | null>(null);
-  const [qrTimestamp, setQrTimestamp] = useState(Date.now());
-  const [calendars, setCalendars] = useState<any[]>([]);
-  const [spreadsheets, setSpreadsheets] = useState<any[]>([]);
+  const [qrTimestamp, setQrTimestamp] = useState(() => Date.now());
+  const [calendars, setCalendars] = useState<GoogleCalendarItem[]>([]);
+  const [spreadsheets, setSpreadsheets] = useState<GoogleSpreadsheetItem[]>([]);
   const [selectedCalendar, setSelectedCalendar] = useState('');
   const [selectedSpreadsheet, setSelectedSpreadsheet] = useState('');
   const [selectedWorksheet, setSelectedWorksheet] = useState('Sheet1');

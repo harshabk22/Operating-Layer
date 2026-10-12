@@ -21,6 +21,8 @@ pub struct ApiState {
     pub auth_store: Arc<AuthStore>,
 }
 
+const DEFAULT_DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
 fn get_frontend_dist_dir() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
     if cwd.join("frontend/dist").exists() {
@@ -34,10 +36,10 @@ fn get_frontend_dist_dir() -> std::path::PathBuf {
 
 async fn serve_index() -> impl axum::response::IntoResponse {
     let path = get_frontend_dist_dir().join("index.html");
-    match tokio::fs::read_to_string(path).await {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+    if let Ok(html) = tokio::fs::read_to_string(path).await {
+        return axum::response::Html(html).into_response();
     }
+    axum::response::Html(DEFAULT_DASHBOARD_HTML.to_string()).into_response()
 }
 
 
@@ -169,6 +171,7 @@ pub async fn start_api_server(
         .route("/dashboard/kpis", get(crate::api::routes::get_dashboard_kpis_handler))
         .route("/system/events", get(crate::api::routes::list_events_handler))
         .route("/system/rbac", get(crate::api::routes::rbac_guard_handler))
+        .route("/system/users", get(crate::api::routes::list_users_handler).post(crate::api::routes::create_user_handler))
         // system settings & observability
         .route("/system/settings", get(crate::api::routes::get_settings_handler).put(crate::api::routes::update_settings_handler))
         .route("/system/health", get(crate::api::routes::system_health_handler))
@@ -205,18 +208,18 @@ pub async fn start_api_server(
     }
 
     let dist_dir = get_frontend_dist_dir();
-    let index_file = dist_dir.join("index.html");
 
     // General Router
     let app = Router::new()
-        .fallback_service(
-            tower_http::services::ServeDir::new(&dist_dir).fallback(
-                tower_http::services::ServeFile::new(&index_file),
-            ),
-        )
+        .route("/", get(serve_index))
         .route("/login", get(serve_index))
         .nest("/api", api_routes.clone())
         .merge(api_routes)
+        .fallback_service(
+            tower_http::services::ServeDir::new(&dist_dir).fallback(
+                axum::routing::get(serve_index),
+            ),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;

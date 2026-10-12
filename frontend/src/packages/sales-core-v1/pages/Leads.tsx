@@ -4,6 +4,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 
+interface Lead {
+  id: string;
+  name?: string;
+  email?: string;
+}
+
 export default function Leads() {
   const { toast } = useToast();
   const { data, isLoading } = useData('/api/sales/leads');
@@ -12,7 +18,7 @@ export default function Leads() {
   const [formData, setFormData] = useState({ name: '', email: '' });
   const [search, setSearch] = useState('');
 
-  const filteredData = data ? (Object.values(data) as any[]).filter(d => 
+  const filteredData = data ? (Object.values(data) as Lead[]).filter(d => 
     (d.name?.toLowerCase() || '').includes(search.toLowerCase())
   ) : [];
 
@@ -22,13 +28,13 @@ export default function Leads() {
       const res = await fetch(endpoint, { method });
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
-        window.location.href = '/login';
+        window.location.assign('/login');
         return;
       }
       if (!res.ok) throw new Error('Request failed');
       toast({ title: 'Success', description: 'Action completed successfully' });
       queryClient.invalidateQueries();
-    } catch (err) {
+    } catch {
       toast({ title: 'Error', description: 'Action failed', variant: 'destructive' });
     }
   };
@@ -55,7 +61,7 @@ export default function Leads() {
         {isLoading ? <div className="p-8 text-center text-muted-foreground">Loading...</div> : (
           filteredData.length === 0 ? <div className="p-8 text-center text-muted-foreground">No leads found</div> : (
             <div className="p-4 space-y-4">
-              {filteredData.map((item: any, i: number) => (
+              {filteredData.map((item, i) => (
                 <div key={i} className="flex justify-between items-center p-4 border rounded-lg hover:bg-accent/50 transition-colors">
                   <div>
                     <p className="font-medium text-sm">{item.name || item.id}</p>

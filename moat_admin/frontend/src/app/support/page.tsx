@@ -291,7 +291,7 @@ function SupportPage() {
           <div className="bg-surface-container border border-outline-variant w-full max-w-md rounded-xl p-6 shadow-2xl space-y-4">
             <h2 className="text-sm font-semibold tracking-wide text-foreground uppercase font-mono">Resolve Incident</h2>
             <p className="text-xs text-on-surfaceVariant">
-              Confirm resolution of incident <strong className="text-primary font-mono">{selectedIncident.id}</strong>: "{selectedIncident.summary}"?
+              Confirm resolution of incident <strong className="text-primary font-mono">{selectedIncident.id}</strong>: &quot;{selectedIncident.summary}&quot;?
             </p>
             <div className="flex space-x-2 pt-2 justify-end">
               <button

@@ -24,6 +24,8 @@ test_migrations.db
 *.txt
 *.pdf
 *.html
+!moat_core/src/api/dashboard.html
+!frontend/index.html
 
 # Python build artifacts
 __pycache__/

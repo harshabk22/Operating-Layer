@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Send, User, Phone, Bot, Check, ShieldAlert, Pause, Play } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
@@ -57,14 +57,22 @@ export default function Inbox() {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
 
-  const fetchThreads = async () => {
+  const checkAuth = useCallback((res: Response) => {
+    if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('auth');
+      localStorage.removeItem('role');
+      if (window.location.pathname !== '/login') {
+        window.location.assign('/login');
+      }
+      return true;
+    }
+    return false;
+  }, []);
+
+  const fetchThreads = useCallback(async () => {
     try {
       const res = await fetch('/api/threads');
-      if (res.status === 401 || res.status === 403) {
-        localStorage.removeItem('auth');
-        window.location.href = '/login';
-        return;
-      }
+      if (checkAuth(res)) return;
       if (res.ok) {
         const data = await res.json();
         setThreads(data);
@@ -74,25 +82,30 @@ export default function Inbox() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [checkAuth]);
 
-  const fetchThreadDetail = async (id: string) => {
+  const fetchThreadDetail = useCallback(async (id: string, signal?: AbortSignal) => {
     try {
-      const res = await fetch(`/api/threads/${id}`);
+      const res = await fetch(`/api/threads/${id}`, { signal });
+      if (checkAuth(res)) return;
       if (res.ok) {
         const data = await res.json();
-        setThreadDetail(data);
+        if (activeThreadIdRef.current === id) {
+          setThreadDetail(data);
+        }
       }
-    } catch (err) {
-      console.error('Failed to fetch thread detail', err);
+    } catch (err: unknown) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Failed to fetch thread detail', err);
+      }
     }
-  };
+  }, [checkAuth]);
 
   useEffect(() => {
     fetchThreads();
 
     let socket: WebSocket | null = null;
-    let reconnectTimeout: any = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
     let isMounted = true;
 
     const connectWs = () => {
@@ -143,15 +156,21 @@ export default function Inbox() {
         clearTimeout(reconnectTimeout);
       }
     };
-  }, []);
+  }, [fetchThreads, fetchThreadDetail]);
 
   useEffect(() => {
-    if (activeThreadId) {
-      fetchThreadDetail(activeThreadId);
-    } else {
+    if (!activeThreadId) {
       setThreadDetail(null);
+      return;
     }
-  }, [activeThreadId]);
+
+    const controller = new AbortController();
+    fetchThreadDetail(activeThreadId, controller.signal);
+
+    return () => {
+      controller.abort();
+    };
+  }, [activeThreadId, fetchThreadDetail]);
 
   useEffect(() => {
     if (chatBodyRef.current) {
@@ -164,13 +183,17 @@ export default function Inbox() {
     const action = threadDetail.thread.is_paused ? 'resume' : 'pause';
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/${action}`, { method: 'POST' });
+      if (checkAuth(res)) return;
       if (res.ok) {
         toast({ title: 'Success', description: `AI automated response ${action}d.` });
         fetchThreadDetail(activeThreadId);
         fetchThreads();
+      } else {
+        toast({ title: 'Error', description: `Failed to ${action} thread.`, variant: 'destructive' });
       }
     } catch (err) {
       console.error(err);
+      toast({ title: 'Error', description: 'Network error performing action.', variant: 'destructive' });
     }
   };
 
@@ -180,13 +203,17 @@ export default function Inbox() {
     const action = isHuman ? 'release' : 'takeover';
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/${action}`, { method: 'POST' });
+      if (checkAuth(res)) return;
       if (res.ok) {
         toast({ title: 'Success', description: isHuman ? 'Control released back to AI.' : 'Human operator takeover active.' });
         fetchThreadDetail(activeThreadId);
         fetchThreads();
+      } else {
+        toast({ title: 'Error', description: 'Failed to update control mode.', variant: 'destructive' });
       }
     } catch (err) {
       console.error(err);
+      toast({ title: 'Error', description: 'Network error performing action.', variant: 'destructive' });
     }
   };
 
@@ -200,12 +227,16 @@ export default function Inbox() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body: messageText.trim() })
       });
+      if (checkAuth(res)) return;
       if (res.ok) {
         setMessageText('');
         fetchThreadDetail(activeThreadId);
+      } else {
+        toast({ title: 'Error', description: 'Failed to send message.', variant: 'destructive' });
       }
     } catch (err) {
       console.error(err);
+      toast({ title: 'Error', description: 'Network error sending message.', variant: 'destructive' });
     }
   };
 
@@ -213,12 +244,16 @@ export default function Inbox() {
     if (!activeThreadId) return;
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/approve_suggestion`, { method: 'POST' });
+      if (checkAuth(res)) return;
       if (res.ok) {
         toast({ title: 'Approved', description: 'AI suggestion sent successfully.' });
         fetchThreadDetail(activeThreadId);
+      } else {
+        toast({ title: 'Error', description: 'Failed to approve suggestion.', variant: 'destructive' });
       }
     } catch (err) {
       console.error(err);
+      toast({ title: 'Error', description: 'Network error approving suggestion.', variant: 'destructive' });
     }
   };
 

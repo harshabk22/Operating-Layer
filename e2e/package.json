@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "description": "Playwright E2E Tests for MoatAgeex",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report",
+    "check:login": "node check_login_flow.js",
+    "check:browser": "node check_browser.js",
+    "check:dev": "node check_dev.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.42.0",

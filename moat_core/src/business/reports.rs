@@ -11,6 +11,46 @@ pub fn generate_reports(conn: &Connection) -> MoatResult<()> {
     Ok(())
 }
 
+fn get_report_path(filename: &str) -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("MOAT_WORKSPACE_DIR") {
+        return std::path::PathBuf::from(dir).join(filename);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(parent) = cwd.parent() {
+            if let Ok(content) = std::fs::read_to_string(parent.join("Cargo.toml")) {
+                if content.contains("[workspace]") {
+                    return parent.join(filename);
+                }
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(cwd.join("Cargo.toml")) {
+            if content.contains("[workspace]") {
+                return cwd.join(filename);
+            }
+        }
+        return cwd.join(filename);
+    }
+    std::path::PathBuf::from(filename)
+}
+
+fn write_report(filename: &str, content: &str) -> MoatResult<()> {
+    let path = get_report_path(filename);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match File::create(&path) {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(content.as_bytes()) {
+                eprintln!("[Reports] Failed to write {}: {}", path.display(), e);
+            }
+        }
+        Err(e) => {
+            eprintln!("[Reports] Failed to create {}: {}", path.display(), e);
+        }
+    }
+    Ok(())
+}
+
 fn generate_metrics_report(conn: &Connection) -> MoatResult<()> {
     let opportunities_created: i64 = conn
         .query_row("SELECT COUNT(*) FROM business_opportunities", [], |r| {
@@ -70,11 +110,7 @@ fn generate_metrics_report(conn: &Connection) -> MoatResult<()> {
         chrono::Utc::now().to_rfc3339()
     );
 
-    let mut file = File::create("/Users/harshavardhanbk/Desktop/MoatAgeex/BUSINESS_METRICS.md")
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    Ok(())
+    write_report("BUSINESS_METRICS.md", &content)
 }
 
 fn generate_queue_report(conn: &Connection) -> MoatResult<()> {
@@ -109,11 +145,7 @@ fn generate_queue_report(conn: &Connection) -> MoatResult<()> {
         chrono::Utc::now().to_rfc3339()
     );
 
-    let mut file = File::create("/Users/harshavardhanbk/Desktop/MoatAgeex/OPERATOR_QUEUE_MODEL.md")
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    Ok(())
+    write_report("OPERATOR_QUEUE_MODEL.md", &content)
 }
 
 fn generate_opportunity_intelligence_report(conn: &Connection) -> MoatResult<()> {
@@ -150,12 +182,7 @@ fn generate_opportunity_intelligence_report(conn: &Connection) -> MoatResult<()>
         chrono::Utc::now().to_rfc3339()
     );
 
-    let mut file =
-        File::create("/Users/harshavardhanbk/Desktop/MoatAgeex/OPPORTUNITY_INTELLIGENCE.md")
-            .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    Ok(())
+    write_report("OPPORTUNITY_INTELLIGENCE.md", &content)
 }
 
 fn generate_decision_flow_report() -> MoatResult<()> {
@@ -191,10 +218,5 @@ fn generate_decision_flow_report() -> MoatResult<()> {
          Default ───────────────────────────► ANSWER_ONLY\n\
          ```\n";
 
-    let mut file =
-        File::create("/Users/harshavardhanbk/Desktop/MoatAgeex/ENGAGEMENT_DECISION_FLOW.md")
-            .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| crate::MoatError::Orchestrator(e.to_string()))?;
-    Ok(())
+    write_report("ENGAGEMENT_DECISION_FLOW.md", content)
 }

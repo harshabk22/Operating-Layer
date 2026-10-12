@@ -1,16 +1,10 @@
 {
-  "finalUrl": "http://localhost:3000/login",
+  "finalUrl": "http://localhost:8080/login",
   "consoleLogs": [
-    "[debug] [vite] connecting...",
-    "[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
-    "[debug] [vite] connected.",
-    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)",
-    "[debug] [vite] connecting...",
-    "[debug] [vite] connected.",
-    "[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    "[error] Failed to load resource: the server responded with a status of 401 (Unauthorized)"
   ],
   "errors": [
-    "Request failed: GET http://localhost:3000/api/platform/packages - net::ERR_ABORTED"
+    "Request failed: GET http://localhost:8080/api/platform/packages - net::ERR_ABORTED"
   ],
-  "bodyHtml": "<!DOCTYPE html><html lang=\"en\" class=\"dark\"><head>\n    <script type=\"module\">import { injectIntoGlobalHook } from \"/@react-refresh\";\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () => {};\nwindow.$RefreshSig$ = () => (type) => type;</script>\n\n    <script type=\"module\" src=\"/@vite/client\"></script>\n\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n    <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin=\"\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap\" rel=\"stylesheet\">\n    <title>MoatAgeex - Production Platform</title>\n  <style type=\"text/css\" data-vite-dev-id=\"/Users/harshavardhanbk/Desktop/MoatAgeex/frontend/src/index.css\">/*! tailwindcss v4.3.1 | MIT License | https://tailwindcss.com */\n@layer properties;\n@layer theme, base, c"
+  "bodyHtml": "<!DOCTYPE html><html lang=\"en\"><head>\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>MoatAgeex - Enterprise Operating Layer</title>\n    <script type=\"module\" crossorigin=\"\" src=\"/assets/index-nqYx9bPU.js\"></script>\n    <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/index-Zq2VEhxy.css\">\n  </head>\n  <body>\n    <div id=\"root\"><div class=\"min-h-screen flex items-center justify-center bg-background p-4\"><div class=\"rounded-xl border bg-card text-card-foreground shadow w-[400px]\"><div class=\"flex flex-col space-y-1.5 p-6\"><h3 class=\"tracking-tight text-2xl font-bold text-center\">MoatAgeex Platform</h3></div><div class=\"p-6 pt-0\"><form class=\"space-y-4\"><div class=\"space-y-1\"><label for=\"username\" class=\"text-xs font-semibold text-muted-foreground uppercase\">Username</label><input id=\"username\" class=\"w-full p-2 border rounded bg-background text-foreground text"
 }

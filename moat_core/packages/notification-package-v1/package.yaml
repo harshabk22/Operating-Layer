@@ -5,9 +5,15 @@ description: Notification routing, templates, and history log package
 routes:
   - path: /operations/notifications
     component: Notifications
+  - path: /notifications
+    component: Notifications
   - path: /operations/templates
     component: Templates
+  - path: /notifications/templates
+    component: Templates
   - path: /operations/history
+    component: History
+  - path: /notifications/history
     component: History
 navigation_entries:
   - label: Operations

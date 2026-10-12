@@ -17,22 +17,19 @@ impl AgentConfig {
     }
 
     fn load_prompt(display_name: &str, relative_path: &str) -> Result<String> {
-        let root_path = PathBuf::from(relative_path);
-        let crate_path = PathBuf::from(format!("moat_core/{}", relative_path));
-
-        // Warn when the root copy shadows the (richer) crate copy
-        if root_path.exists() && crate_path.exists() {
-            eprintln!(
-                "[Config] WARNING: {} shadows moat_core/{} — \
-                the crate copy has richer persona content that is being ignored. \
-                Consider consolidating to a single source.",
-                relative_path, relative_path
-            );
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut candidates: Vec<PathBuf> = vec![
+            cwd.join(relative_path),
+            cwd.join("moat_core").join(relative_path),
+            PathBuf::from(relative_path),
+            PathBuf::from(format!("moat_core/{}", relative_path)),
+        ];
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join(relative_path));
+            candidates.push(parent.join("moat_core").join(relative_path));
         }
 
-        let paths = [&root_path, &crate_path];
-
-        for path in &paths {
+        for path in &candidates {
             if path.exists() {
                 let content = std::fs::read_to_string(path)
                     .with_context(|| format!("Failed to read {}", path.display()))?;

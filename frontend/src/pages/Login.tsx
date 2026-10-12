@@ -28,7 +28,7 @@ export default function Login() {
       localStorage.setItem('auth', 'true');
       localStorage.setItem('role', data.role.toLowerCase());
       navigate('/');
-    } catch (err) {
+    } catch {
       setError('Invalid credentials or server unavailable.');
     }
   };

@@ -4,6 +4,12 @@ import { useData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 
+interface Template {
+  id: string;
+  name: string;
+  body?: string;
+}
+
 export default function Notifications() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -44,8 +50,8 @@ export default function Notifications() {
     const templateId = e.target.value;
     setSelectedTemplateId(templateId);
     if (templateId) {
-      const templateList = templates ? Object.values(templates) : [];
-      const selectedTmpl: any = templateList.find((t: any) => t.id === templateId);
+      const templateList = templates ? (Object.values(templates) as Template[]) : [];
+      const selectedTmpl = templateList.find((t) => t.id === templateId);
       if (selectedTmpl) {
         setMessage(selectedTmpl.body || '');
       }
@@ -70,7 +76,7 @@ export default function Notifications() {
                 onChange={handleTemplateChange}
               >
                 <option value="">-- None (Custom Message) --</option>
-                {Object.values(templates).map((tmpl: any) => (
+                {(Object.values(templates) as Template[]).map((tmpl) => (
                   <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
                 ))}
               </select>

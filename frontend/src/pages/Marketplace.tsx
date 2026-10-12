@@ -95,6 +95,29 @@ const AVAILABLE_PACKAGES: MarketplacePackage[] = [
   }
 ];
 
+const PACKAGE_ACTIONS = [
+  { label: 'Upgrade', suffix: '/upgrade', method: 'POST', msg: 'Package upgraded successfully', variant: 'outline' as const, className: 'text-xs font-medium px-3' },
+  { label: 'Rollback', suffix: '/rollback', method: 'POST', msg: 'Package rolled back', variant: 'outline' as const, className: 'text-xs font-medium px-3' },
+  { label: 'Uninstall', suffix: '', method: 'DELETE', msg: 'Package uninstalled', variant: 'destructive' as const, className: 'text-xs font-semibold px-3' },
+];
+
+function SchemaSection({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="border p-4 rounded-lg bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
+      <div className="text-xs font-bold text-slate-600 border-b pb-2 uppercase tracking-wide">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <div key={item} className="text-[11px] font-mono bg-card px-2 py-1 rounded border shadow-sm text-slate-700 dark:text-slate-300">
+            {item}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Marketplace() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -106,7 +129,9 @@ export default function Marketplace() {
 
   const isInstalled = (packageId: string) => {
     if (!installedPackages) return false;
-    return Object.values(installedPackages).some((pkg: any) => pkg.package_id === packageId || pkg.id === packageId);
+    return (Object.values(installedPackages) as Array<{ package_id?: string; id?: string }>).some(
+      (pkg) => pkg.package_id === packageId || pkg.id === packageId
+    );
   };
 
   const handleAction = async (packageId: string, endpoint: string, method: string = 'POST', successMsg: string) => {
@@ -115,13 +140,13 @@ export default function Marketplace() {
       const res = await fetch(endpoint, { method });
       if (res.status === 401 || res.status === 403) {
         localStorage.removeItem('auth');
-        window.location.href = '/login';
+        window.location.assign('/login');
         return;
       }
       if (!res.ok) throw new Error('Operation failed');
       toast({ title: 'Success', description: successMsg });
       queryClient.invalidateQueries();
-    } catch (err) {
+    } catch {
       toast({ title: 'Error', description: 'Action failed', variant: 'destructive' });
     } finally {
       setActionLoading(null);
@@ -199,56 +224,25 @@ export default function Marketplace() {
                         Install Package
                       </Button>
                     ) : (
-                      <>
+                      PACKAGE_ACTIONS.map((action) => (
                         <Button
-                          variant="outline"
+                          key={action.label}
+                          variant={action.variant}
                           size="sm"
-                          className="text-xs font-medium px-3"
+                          className={action.className}
                           disabled={actionLoading === pkg.id}
                           onClick={() =>
                             handleAction(
                               pkg.id,
-                              `/api/platform/packages/${pkg.id}/upgrade`,
-                              'POST',
-                              'Package upgraded successfully'
+                              `/api/platform/packages/${pkg.id}${action.suffix}`,
+                              action.method,
+                              action.msg
                             )
                           }
                         >
-                          Upgrade
+                          {action.label}
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-xs font-medium px-3"
-                          disabled={actionLoading === pkg.id}
-                          onClick={() =>
-                            handleAction(
-                              pkg.id,
-                              `/api/platform/packages/${pkg.id}/rollback`,
-                              'POST',
-                              'Package rolled back'
-                            )
-                          }
-                        >
-                          Rollback
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="text-xs font-semibold px-3"
-                          disabled={actionLoading === pkg.id}
-                          onClick={() =>
-                            handleAction(
-                              pkg.id,
-                              `/api/platform/packages/${pkg.id}`,
-                              'DELETE',
-                              'Package uninstalled'
-                            )
-                          }
-                        >
-                          Uninstall
-                        </Button>
-                      </>
+                      ))
                     )}
                   </div>
                 </CardFooter>
@@ -258,7 +252,7 @@ export default function Marketplace() {
         </div>
       )}
 
-      {/* Package Detail Drawer / Modal (Stripe / Vercel Style) */}
+      {/* Package Detail Drawer / Modal */}
       {selectedPkg && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="relative w-full max-w-2xl bg-card border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
@@ -379,50 +373,14 @@ export default function Marketplace() {
 
               {modalTab === 'registry' && (
                 <div className="space-y-6">
-                  {/* Commands */}
                   <div className="space-y-3">
                     <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
                       <Database className="h-4 w-4 text-purple-500" /> Declared Event Sourcing Schema
                     </h3>
                     <div className="grid gap-4 md:grid-cols-3">
-                      <div className="border p-4 rounded-lg bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
-                        <div className="text-xs font-bold text-slate-600 border-b pb-2 uppercase tracking-wide">
-                          Commands
-                        </div>
-                        <div className="space-y-1.5">
-                          {selectedPkg.commands.map((cmd) => (
-                            <div key={cmd} className="text-[11px] font-mono bg-card px-2 py-1 rounded border shadow-sm text-slate-700 dark:text-slate-300">
-                              {cmd}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="border p-4 rounded-lg bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
-                        <div className="text-xs font-bold text-slate-600 border-b pb-2 uppercase tracking-wide">
-                          Events
-                        </div>
-                        <div className="space-y-1.5">
-                          {selectedPkg.events.map((evt) => (
-                            <div key={evt} className="text-[11px] font-mono bg-card px-2 py-1 rounded border shadow-sm text-slate-700 dark:text-slate-300">
-                              {evt}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="border p-4 rounded-lg bg-slate-50/50 dark:bg-slate-900/30 space-y-3">
-                        <div className="text-xs font-bold text-slate-600 border-b pb-2 uppercase tracking-wide">
-                          Projections
-                        </div>
-                        <div className="space-y-1.5">
-                          {selectedPkg.projections.map((proj) => (
-                            <div key={proj} className="text-[11px] font-mono bg-card px-2 py-1 rounded border shadow-sm text-slate-700 dark:text-slate-300">
-                              {proj}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <SchemaSection title="Commands" items={selectedPkg.commands} />
+                      <SchemaSection title="Events" items={selectedPkg.events} />
+                      <SchemaSection title="Projections" items={selectedPkg.projections} />
                     </div>
                   </div>
                 </div>

@@ -15,18 +15,7 @@
       }
     },
     {
-      "url": "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
-      "method": "GET",
-      "headers": {
-        "sec-ch-ua-platform": "\"macOS\"",
-        "referer": "http://localhost:8080/",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
-        "sec-ch-ua": "\"HeadlessChrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"",
-        "sec-ch-ua-mobile": "?0"
-      }
-    },
-    {
-      "url": "http://localhost:8080/assets/index-Mg7_bXDX.js",
+      "url": "http://localhost:8080/assets/index-nqYx9bPU.js",
       "method": "GET",
       "headers": {
         "origin": "http://localhost:8080",
@@ -38,24 +27,12 @@
       }
     },
     {
-      "url": "http://localhost:8080/assets/index-kUUIfZaL.css",
+      "url": "http://localhost:8080/assets/index-Zq2VEhxy.css",
       "method": "GET",
       "headers": {
         "origin": "http://localhost:8080",
         "sec-ch-ua-platform": "\"macOS\"",
         "referer": "http://localhost:8080/login",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
-        "sec-ch-ua": "\"HeadlessChrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"",
-        "sec-ch-ua-mobile": "?0"
-      }
-    },
-    {
-      "url": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2",
-      "method": "GET",
-      "headers": {
-        "origin": "http://localhost:8080",
-        "sec-ch-ua-platform": "\"macOS\"",
-        "referer": "https://fonts.googleapis.com/",
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
         "sec-ch-ua": "\"HeadlessChrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"",
         "sec-ch-ua-mobile": "?0"
@@ -107,5 +84,5 @@
       }
     }
   ],
-  "bodyHtml": "<!DOCTYPE html><html lang=\"en\" class=\"dark\"><head>\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n    <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin=\"\">\n    <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap\" rel=\"stylesheet\">\n    <title>MoatAgeex - Production Platform</title>\n    <script type=\"module\" crossorigin=\"\" src=\"/assets/index-Mg7_bXDX.js\"></script>\n    <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/index-kUUIfZaL.css\">\n  </head>\n  <body>\n    <div id=\"root\"><div id=\"app-layout\" class=\"min-h-screen bg-background text-foreground flex flex-col md:flex-row\"><aside class=\"w-full md:w-64 border-r bg-card/50 backdrop-blur-xl flex flex-col font-sans\"><div class=\"p-6 border-b\"><h1 class=\"text-xl font-bold bg-gradient-to-r from-prima"
+  "bodyHtml": "<!DOCTYPE html><html lang=\"en\"><head>\n    <meta charset=\"UTF-8\">\n    <link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>MoatAgeex - Enterprise Operating Layer</title>\n    <script type=\"module\" crossorigin=\"\" src=\"/assets/index-nqYx9bPU.js\"></script>\n    <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/index-Zq2VEhxy.css\">\n  </head>\n  <body>\n    <div id=\"root\"><div id=\"app-layout\" class=\"min-h-screen bg-background text-foreground flex flex-col md:flex-row\"><aside class=\"w-full md:w-64 border-r bg-card/50 backdrop-blur-xl flex flex-col font-sans\"><div class=\"p-6 border-b\"><h1 class=\"text-xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent\">MoatAgeex</h1><span class=\"text-xs text-muted-foreground uppercase tracking-wider\">owner</span></div><nav class=\"flex-1 p-4 space-y-6 overflow-y-auto\"><div class=\"space-y-1\"><div class=\"px-3 py-1 text-xs font-semibold text-m"
 }

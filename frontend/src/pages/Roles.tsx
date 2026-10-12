@@ -31,8 +31,8 @@ export default function Roles() {
   const [roles] = useState<Role[]>(DEFAULT_ROLES);
 
   // Dynamically extract all available package permissions
-  const dynamicPermissions = installedPackages
-    ? (installedPackages as any[]).flatMap((pkg: any) => pkg.permissions || [])
+  const dynamicPermissions: string[] = installedPackages
+    ? (installedPackages as Array<{ permissions?: string[] }>).flatMap((pkg) => pkg.permissions || [])
     : [];
 
   const isPermissionActive = (perm: string) => {
